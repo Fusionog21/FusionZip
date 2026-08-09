@@ -1,0 +1,5 @@
+customtkinter
+pyzipper
+py7zr
+rarfile
+pyinstaller
