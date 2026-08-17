@@ -4,7 +4,7 @@
 
 [Setup]
 AppName=Fusion Zip
-AppVersion=1.1.0
+AppVersion=2.0.0
 AppPublisher=Fusion Zip
 DefaultDirName={autopf}\Fusion Zip
 DefaultGroupName=Fusion Zip
@@ -15,11 +15,12 @@ OutputDir=.
 OutputBaseFilename=FusionZip_Setup
 SetupIconFile=icon.ico
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=admin
 
 [Files]
 Source: "dist\FusionZip.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "FusionZipShell.dll"; DestDir: "{app}"; Flags: ignoreversion regserver
+Source: "FusionZipShell.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace 64bit regserver
 Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "unpack_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "vault_icon.ico"; DestDir: "{app}"; Flags: ignoreversion

@@ -1,6 +1,6 @@
 """
 ===============================================================================
-FUSION ZIP — Windows 11 Fluent Dark Edition (Master Engine)
+FUSION ZIP — Windows 11 Fluent Dark Edition (Master Engine v2.0)
 ===============================================================================
 """
 
@@ -31,7 +31,7 @@ except ImportError:
 # Register AppUserModelID for Windows Taskbar & Titlebar Icons
 if sys.platform == "win32":
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FusionZip.DesktopApp.1.0")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FusionZip.DesktopApp.2.0")
     except Exception:
         pass
 
@@ -43,7 +43,7 @@ try:
 except ImportError:
     messagebox.showerror(
         "Missing Dependency",
-        "CustomTkinter and Pillow are required.\nPlease run: pip install customtkinter pyzipper py7zr rarfile pillow"
+        "CustomTkinter and dependencies are required.\nPlease run: pip install customtkinter pyzipper py7zr rarfile pillow"
     )
     sys.exit(1)
 
@@ -81,20 +81,20 @@ IPC_PORT = 49152
 # =============================================================================
 # WINDOWS 11 FLUENT DARK COLOR PALETTE & DESIGN CONSTANTS
 # =============================================================================
-COLOR_BG_DARK       = "#12141d"  # Deep slate/mica canvas background
-COLOR_TOP_CHROME    = "#181b27"  # Top command bar / Title chrome
-COLOR_CARD_BG       = "#181b27"  # Elevated container cards
-COLOR_FIELD_BG      = "#202434"  # Input fields, table header, and row background
-COLOR_ROW_HOVER     = "#282e42"  # Smooth ambient glow on hover
-COLOR_BORDER        = "#2b3147"  # Fluent subtle 1px border stroke
-COLOR_BLUE_ACCENT   = "#0078d4"  # Windows 11 primary accent blue
-COLOR_BLUE_HOVER    = "#1084d8"  # Windows 11 accent hover
-COLOR_ACCENT_TEXT   = "#60cdff"  # Windows 11 fluent cyan text
-COLOR_TEXT_PRIMARY  = "#ffffff"  # Pure crisp white text
-COLOR_TEXT_MUTED    = "#9ea7c2"  # Windows 11 secondary text gray
-COLOR_TEXT_DISABLED = "#535a73"  # Disabled element text
-COLOR_TEXT_ALERT    = "#ff7b89"  # Fluent warning soft red
-COLOR_BADGE_BG      = "#252a3d"  # Pill badge container background
+COLOR_BG_DARK       = "#12141d"
+COLOR_TOP_CHROME    = "#181b27"
+COLOR_CARD_BG       = "#181b27"
+COLOR_FIELD_BG      = "#202434"
+COLOR_ROW_HOVER     = "#282e42"
+COLOR_BORDER        = "#2b3147"
+COLOR_BLUE_ACCENT   = "#0078d4"
+COLOR_BLUE_HOVER    = "#1084d8"
+COLOR_ACCENT_TEXT   = "#60cdff"
+COLOR_TEXT_PRIMARY  = "#ffffff"
+COLOR_TEXT_MUTED    = "#9ea7c2"
+COLOR_TEXT_DISABLED = "#535a73"
+COLOR_TEXT_ALERT    = "#ff7b89"
+COLOR_BADGE_BG      = "#252a3d"
 
 FONT_FAMILY         = "Segoe UI Variable Text" if sys.platform == "win32" else "Segoe UI"
 
@@ -224,10 +224,10 @@ if sys.platform == "win32":
 
 
 # =============================================================================
-# APPLICATION ICON HELPER (WIN32 WM_SETICON)
+# APPLICATION ICON HELPER
 # =============================================================================
 def apply_app_icon(window):
-    """Applies icon.ico directly to Window Titlebar (WM_SETICON) and Taskbar."""
+    """Applies icon.ico directly to Window Titlebar and Taskbar on Root and Popups."""
     if getattr(sys, 'frozen', False):
         app_dir = os.path.dirname(sys.executable)
     else:
@@ -250,13 +250,16 @@ def apply_app_icon(window):
         return
 
     try:
-        window.iconbitmap(found_path)
+        if window.winfo_exists():
+            window.iconbitmap(found_path)
     except Exception:
         pass
 
     if sys.platform == "win32":
         def _set_win32_icon():
             try:
+                if not window.winfo_exists():
+                    return
                 window.update_idletasks()
                 raw_id = window.winfo_id()
                 hwnd = user32.GetAncestor(wintypes.HWND(raw_id), 2) or raw_id
@@ -277,17 +280,21 @@ def apply_app_icon(window):
             except Exception:
                 pass
 
-        window.after(60, _set_win32_icon)
-        window.after(300, _set_win32_icon)
+        try:
+            if window.winfo_exists():
+                window.after(20, _set_win32_icon)
+                window.after(80, _set_win32_icon)
+                window.after(200, _set_win32_icon)
+        except Exception:
+            pass
 
 
 # =============================================================================
-# GDI+ WINDOWS 11 DYNAMIC ICON EXTRACTOR
+# GDI+ WINDOWS 11 PER-APPLICATION DYNAMIC ICON EXTRACTOR
 # =============================================================================
 _ICON_CACHE = {}
 
 def get_native_windows_icon(path, size=20):
-    """Extracts Windows 11 system icons preserving full 32-bit ARGB alpha transparency."""
     if sys.platform != "win32" or not HAS_PIL:
         return None
 
@@ -300,7 +307,14 @@ def get_native_windows_icon(path, size=20):
             is_dir = True
 
     ext = "" if is_dir else os.path.splitext(path)[1].lower()
-    cache_key = f"DIR_{size}" if is_dir else f"EXT_{ext}_{size}"
+
+    unique_types = [".exe", ".lnk", ".ico", ".dll", ".scr", ".fzip", ".fz"]
+    if is_dir:
+        cache_key = f"DIR_{size}"
+    elif ext in unique_types or (os.path.exists(path) and ext in [".exe", ".lnk"]):
+        cache_key = f"PATH_{os.path.abspath(path).lower()}_{size}"
+    else:
+        cache_key = f"EXT_{ext}_{size}"
 
     if cache_key in _ICON_CACHE:
         return _ICON_CACHE[cache_key]
@@ -310,7 +324,6 @@ def get_native_windows_icon(path, size=20):
     else:
         app_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Custom .fzip vault icon
     if ext in [".fzip", ".fz"]:
         vault_ico_paths = [
             os.path.join(app_dir, "vault_icon.ico"),
@@ -337,7 +350,7 @@ def get_native_windows_icon(path, size=20):
         query_path = path if is_dir else f"dummy{ext}"
         shell32.SHGetFileInfoW(query_path, attr, ctypes.byref(shfi), ctypes.sizeof(shfi), flags)
     else:
-        shell32.SHGetFileInfoW(path, 0, ctypes.byref(shfi), ctypes.sizeof(shfi), flags)
+        shell32.SHGetFileInfoW(os.path.abspath(path), 0, ctypes.byref(shfi), ctypes.sizeof(shfi), flags)
 
     hIcon = shfi.hIcon
     if not hIcon:
@@ -391,7 +404,6 @@ def get_native_windows_icon(path, size=20):
 
 
 def apply_windows_dark_titlebar(window):
-    """Enforces dark mode title bar on Windows 10/11."""
     if sys.platform != "win32":
         return
     try:
@@ -408,7 +420,6 @@ def apply_windows_dark_titlebar(window):
 
 
 def center_window_on_screen(window, width, height):
-    """Calculates coordinates to center any window dead-center on screen."""
     window.update_idletasks()
     screen_width = window.winfo_screenwidth()
     screen_height = window.winfo_screenheight()
@@ -418,7 +429,6 @@ def center_window_on_screen(window, width, height):
 
 
 def enable_windows_dnd_and_mouse(window, dnd_callback, nav_callback=None):
-    """64-bit Drag-and-Drop & Crash-Proof Navigation Hook."""
     if sys.platform != "win32":
         return
     try:
@@ -479,32 +489,14 @@ def enable_windows_dnd_and_mouse(window, dnd_callback, nav_callback=None):
         SetWindowLongPtr(hwnd_root, GWL_WNDPROC, new_wndproc)
         window._dnd_wndproc = new_wndproc
 
-        if raw_id != hwnd_root:
-            try:
-                old_raw = GetWindowLongPtr(raw_id, GWL_WNDPROC)
-                def py_raw_wndproc(hWnd, msg, wParam, lParam):
-                    if msg == WM_XBUTTONDOWN or msg == WM_NCXBUTTONDOWN:
-                        b = (wParam >> 16) & 0xFFFF
-                        if nav_callback:
-                            if b == 1: window.after(0, lambda: nav_callback("back"))
-                            elif b == 2: window.after(0, lambda: nav_callback("forward"))
-                        return 1
-                    return user32.CallWindowProcW(old_raw, hWnd, msg, wParam, lParam)
-                new_raw = WNDPROC_TYPE(py_raw_wndproc)
-                SetWindowLongPtr(raw_id, GWL_WNDPROC, new_raw)
-                window._raw_wndproc = new_raw
-            except Exception:
-                pass
-
     except Exception as e:
-        print(f"Hook error: {e}")
+        print(f"Hook warning: {e}")
 
 
 # =============================================================================
 # ARCHIVE ENCRYPTION DETECTOR
 # =============================================================================
 def check_archive_encrypted(archive_path):
-    """Returns True ONLY if the archive file requires a password to open or extract."""
     if not os.path.exists(archive_path) or os.path.isdir(archive_path):
         return False
 
@@ -518,11 +510,12 @@ def check_archive_encrypted(archive_path):
                 return False
             try:
                 with py7zr.SevenZipFile(archive_path, 'r') as szf:
-                    return szf.needs_password
+                    needs = szf.needs_password() if callable(getattr(szf, 'needs_password', None)) else getattr(szf, 'needs_password', False)
+                    return bool(needs)
             except py7zr.PasswordRequired:
                 return True
             except Exception:
-                return False
+                return True
 
         elif ext == ".rar" and HAS_RARFILE:
             rf = rarfile.RarFile(archive_path, 'r')
@@ -531,44 +524,56 @@ def check_archive_encrypted(archive_path):
             return is_req
 
         elif ext in [".zip", ".fz", ".fzip"]:
-            zf = pyzipper.AESZipFile(archive_path, 'r') if HAS_PYZIPPER else zipfile.ZipFile(archive_path, 'r')
-            is_req = False
-            for zinfo in zf.infolist():
-                if zinfo.flag_bits & 0x1:
-                    is_req = True
-                    break
-            zf.close()
-            return is_req
+            if HAS_PYZIPPER:
+                try:
+                    zf = pyzipper.AESZipFile(archive_path, 'r')
+                    for zinfo in zf.infolist():
+                        if zinfo.flag_bits & 0x1 or getattr(zinfo, 'is_encrypted', False):
+                            zf.close()
+                            return True
+                    zf.close()
+                except Exception:
+                    pass
+            with zipfile.ZipFile(archive_path, 'r') as zf:
+                for zinfo in zf.infolist():
+                    if zinfo.flag_bits & 0x1:
+                        return True
+            return False
     except Exception:
         return False
     return False
 
 
 # =============================================================================
-# CONFLICT STATE HELPER & 7-ZIP STYLE COMPACT RESOLUTION DIALOG
+# CONFLICT STATE & RESOLUTION DIALOG
 # =============================================================================
 class ConflictState:
     def __init__(self):
         self.action = None
         self.apply_to_all = False
 
-def prompt_file_conflict(existing_path, incoming_info, conflict_state):
-    """Pops up the 7-Zip style rich Conflict Resolution Dialog comparing both items."""
+def prompt_file_conflict(existing_path, incoming_info, conflict_state, parent=None):
     if conflict_state.apply_to_all and conflict_state.action:
         return conflict_state.action
 
-    app = ctk.CTk()
-    app.withdraw()
+    standalone = False
+    if not parent:
+        parent = ctk.CTk()
+        parent.withdraw()
+        standalone = True
+
     result = [None, False]
 
     def on_choice(choice, apply_all):
         result[0] = choice
         result[1] = apply_all
-        app.destroy()
 
-    dialog = FileConflictDialog(app, existing_path, incoming_info, on_choice)
-    dialog.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    dialog = FileConflictDialog(parent, existing_path, incoming_info, on_choice)
+    dialog.wait_window()
+
+    if standalone:
+        try: parent.destroy()
+        except Exception: pass
 
     choice = result[0] or "skip"
     if result[1]:
@@ -577,30 +582,29 @@ def prompt_file_conflict(existing_path, incoming_info, conflict_state):
     return choice
 
 
-def resolve_collision_path(dest_path, incoming_info, conflict_state):
-    """Checks collision and resolves path with safe non-destructive Replace/Keep Both/Skip."""
+def resolve_collision_path(dest_path, incoming_info, conflict_state, parent=None):
     if not os.path.exists(dest_path):
         return dest_path, "write"
 
-    choice = prompt_file_conflict(dest_path, incoming_info, conflict_state)
+    choice = prompt_file_conflict(dest_path, incoming_info, conflict_state, parent)
     if choice == "replace":
         return dest_path, "write"
 
     elif choice == "keep_both":
-        parent = os.path.dirname(dest_path)
+        parent_dir = os.path.dirname(dest_path)
         base, ext = os.path.splitext(os.path.basename(dest_path))
         counter = 1
-        new_path = os.path.join(parent, f"{base} ({counter}){ext}")
+        new_path = os.path.join(parent_dir, f"{base} ({counter}){ext}")
         while os.path.exists(new_path):
             counter += 1
-            new_path = os.path.join(parent, f"{base} ({counter}){ext}")
+            new_path = os.path.join(parent_dir, f"{base} ({counter}){ext}")
         return new_path, "write"
 
     return dest_path, "skip"
 
 
 # =============================================================================
-# 7-ZIP STYLE COMPACT CONFLICT INSPECTION DIALOG (520x370)
+# 7-ZIP STYLE CONFLICT DIALOG
 # =============================================================================
 class FileConflictDialog(ctk.CTkToplevel):
     def __init__(self, parent, existing_path, incoming_info, callback):
@@ -637,7 +641,6 @@ class FileConflictDialog(ctk.CTkToplevel):
         )
         sub_lbl.pack(anchor="w", padx=14, pady=(0, 8))
 
-        # Existing Item Card
         exist_card = ctk.CTkFrame(card, fg_color=COLOR_FIELD_BG, corner_radius=6, border_width=1, border_color=COLOR_BORDER)
         exist_card.pack(fill="x", padx=14, pady=4)
 
@@ -661,7 +664,6 @@ class FileConflictDialog(ctk.CTkToplevel):
             font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=COLOR_TEXT_MUTED, anchor="w"
         ).pack(anchor="w", padx=12, pady=(0, 8))
 
-        # Incoming Item Card
         in_card = ctk.CTkFrame(card, fg_color=COLOR_FIELD_BG, corner_radius=6, border_width=1, border_color=COLOR_BORDER)
         in_card.pack(fill="x", padx=14, pady=4)
 
@@ -737,7 +739,6 @@ class FileConflictDialog(ctk.CTkToplevel):
 # WINDOWS 11 FLUENT HOVER TOOLTIP MODULE
 # =============================================================================
 class FloatingTooltip:
-    """Creates a Windows 11 style fluent dark tooltip."""
     def __init__(self, widget, text):
         self.widget = widget
         self.text = text
@@ -777,55 +778,7 @@ class FloatingTooltip:
 
 
 # =============================================================================
-# TOAST NOTIFICATION POPUP DIALOG
-# =============================================================================
-class ToastNotification(ctk.CTkToplevel):
-    def __init__(self, title, message):
-        super().__init__()
-        ctk.set_appearance_mode("Dark")
-        self.title(title)
-        self.resizable(False, False)
-        self.configure(fg_color=COLOR_BG_DARK)
-        self.transient()
-
-        apply_app_icon(self)
-        center_window_on_screen(self, 460, 180)
-        apply_windows_dark_titlebar(self)
-
-        card = ctk.CTkFrame(self, fg_color=COLOR_CARD_BG, corner_radius=10, border_width=1, border_color=COLOR_BORDER)
-        card.pack(fill="both", expand=True, padx=12, pady=12)
-
-        hdr_lbl = ctk.CTkLabel(
-            card, text=f"{title}",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_ACCENT_TEXT
-        )
-        hdr_lbl.pack(anchor="w", padx=15, pady=(12, 4))
-
-        msg_lbl = ctk.CTkLabel(
-            card, text=message,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=COLOR_TEXT_PRIMARY,
-            justify="left", wraplength=410
-        )
-        msg_lbl.pack(anchor="w", padx=15, pady=(0, 12))
-
-        btn_ok = ctk.CTkButton(
-            card, text="OK", fg_color=COLOR_BLUE_ACCENT, hover_color=COLOR_BLUE_HOVER,
-            text_color="#FFFFFF", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-            width=75, height=28, corner_radius=6, command=self.destroy
-        )
-        btn_ok.pack(side="right", padx=15, pady=(0, 10))
-
-
-def show_toast(title, message):
-    app = ctk.CTk()
-    app.withdraw()
-    toast = ToastNotification(title, message)
-    toast.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
-
-
-# =============================================================================
-# ENCRYPTED ARCHIVE DIALOG
+# ENCRYPTED ARCHIVE UNLOCK DIALOG
 # =============================================================================
 class EncryptedArchiveDialog(ctk.CTkToplevel):
     def __init__(self, parent, archive_path, callback):
@@ -924,31 +877,44 @@ class EncryptedArchiveDialog(ctk.CTkToplevel):
             if ext in [".7z", ".fz", ".fzip"]:
                 if HAS_PY7ZR:
                     with py7zr.SevenZipFile(self.archive_path, 'r', password=pwd) as szf:
-                        szf.getnames()
+                        names = szf.getnames()
+                        if not names: pass
                 else:
-                    raise Exception("py7zr required.")
+                    raise Exception("py7zr is required to open this archive.")
             elif ext == ".rar":
                 if HAS_RARFILE:
                     rf = rarfile.RarFile(self.archive_path, 'r')
                     rf.setpassword(pwd)
-                    rf.namelist()
+                    rf.testrar()
                     rf.close()
                 else:
-                    raise Exception("rarfile required.")
+                    raise Exception("rarfile is required to open this archive.")
             else:
-                zf = pyzipper.AESZipFile(self.archive_path, 'r') if HAS_PYZIPPER else zipfile.ZipFile(self.archive_path, 'r')
-                zf.setpassword(pwd.encode('utf-8'))
-                bad = zf.testzip()
-                zf.close()
-                if bad is not None and HAS_PYZIPPER:
-                    raise Exception("Incorrect password")
+                if HAS_PYZIPPER:
+                    zf = pyzipper.AESZipFile(self.archive_path, 'r')
+                    zf.setpassword(pwd.encode('utf-8'))
+                    bad = zf.testzip()
+                    zf.close()
+                    if bad is not None:
+                        raise Exception("Incorrect password.")
+                else:
+                    zf = zipfile.ZipFile(self.archive_path, 'r')
+                    zf.setpassword(pwd.encode('utf-8'))
+                    bad = zf.testzip()
+                    zf.close()
+                    if bad is not None:
+                        raise Exception("Incorrect password.")
 
             self.unlocked_password = pwd
             self.destroy()
             if self.callback:
                 self.callback(self.archive_path, pwd)
-        except Exception:
-            self.err_lbl.configure(text="Incorrect password. Please try again.")
+        except Exception as e:
+            err_msg = str(e)
+            if "password" in err_msg.lower() or "bad7zfile" in err_msg.lower() or "crc" in err_msg.lower() or "header" in err_msg.lower():
+                self.err_lbl.configure(text="Incorrect password. Please try again.")
+            else:
+                self.err_lbl.configure(text=f"Error: {err_msg[:38]}")
 
 
 # =============================================================================
@@ -964,10 +930,8 @@ class AddToArchiveDialog(ctk.CTkToplevel):
         self.callback = callback
 
         first_base = os.path.basename(os.path.abspath(targets[0]))
-        if len(targets) > 1 and not os.path.isdir(targets[0]):
-            default_archive_name = "New_Archive.zip"
-        else:
-            default_archive_name = f"{os.path.splitext(first_base)[0]}.zip"
+        stem = first_base if os.path.isdir(targets[0]) else os.path.splitext(first_base)[0]
+        default_archive_name = f"{stem}.zip"
 
         self.title("Add to Archive")
         self.resizable(False, False)
@@ -989,7 +953,7 @@ class AddToArchiveDialog(ctk.CTkToplevel):
         hdr_lbl.pack(anchor="w", padx=15, pady=(12, 2))
 
         sub_lbl = ctk.CTkLabel(
-            card, text="Type a custom name and destination for your new zip file:",
+            card, text="Type a custom name and destination for your archive:",
             font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=COLOR_TEXT_MUTED, justify="left"
         )
         sub_lbl.pack(anchor="w", padx=15, pady=(0, 10))
@@ -1034,6 +998,7 @@ class AddToArchiveDialog(ctk.CTkToplevel):
             placeholder_text="Optional Password..."
         )
         self.pwd_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.pwd_entry.bind("<KeyRelease>", self._on_pwd_changed)
 
         self.btn_toggle = ctk.CTkButton(
             pwd_row, text="👁️", fg_color=COLOR_FIELD_BG, hover_color=COLOR_ROW_HOVER,
@@ -1062,6 +1027,18 @@ class AddToArchiveDialog(ctk.CTkToplevel):
         )
         btn_compress.pack(side="right")
 
+    def _on_pwd_changed(self, event=None):
+        pwd = self.pwd_entry.get().strip()
+        name = self.name_entry.get().strip()
+        if not name: return
+        base, ext = os.path.splitext(name)
+        if pwd and ext.lower() == ".zip":
+            self.name_entry.delete(0, tk.END)
+            self.name_entry.insert(0, f"{base}.fzip")
+        elif not pwd and ext.lower() in [".fzip", ".fz"]:
+            self.name_entry.delete(0, tk.END)
+            self.name_entry.insert(0, f"{base}.zip")
+
     def toggle_pwd(self):
         if self.pwd_entry.cget("show") == "•":
             self.pwd_entry.configure(show="")
@@ -1083,12 +1060,10 @@ class AddToArchiveDialog(ctk.CTkToplevel):
 
         if not archive_name:
             return
-        if password and not archive_name.lower().endswith((".fzip", ".7z")):
-            if archive_name.lower().endswith(".zip"):
-                archive_name = archive_name[:-4] + ".fzip"
-            else:
-                archive_name += ".fzip"
-        elif not password and not archive_name.lower().endswith((".zip", ".fzip")):
+
+        if password and not archive_name.lower().endswith((".fzip", ".7z", ".zip")):
+            archive_name += ".fzip"
+        elif not password and not archive_name.lower().endswith((".zip", ".fzip", ".7z")):
             archive_name += ".zip"
 
         self.destroy()
@@ -1097,15 +1072,16 @@ class AddToArchiveDialog(ctk.CTkToplevel):
 
 
 # =============================================================================
-# UNIVERSAL LIVE FLUENT PROGRESS POPUP (WITH CHUNK STREAMING & AUTO-CLOSE)
+# UNIVERSAL LIVE FLUENT PROGRESS POPUP (EVENT PUMP & AUTO-CLOSE)
 # =============================================================================
 class UniversalLiveProgressDialog(ctk.CTkToplevel):
-    def __init__(self, parent, title, task_fn):
+    def __init__(self, parent, title, task_fn, on_done=None):
         super().__init__(parent)
         ctk.set_appearance_mode("Dark")
 
         self.title(title)
         self.task_fn = task_fn
+        self.on_done = on_done
         self.is_cancelled = False
         self.last_update_t = 0
 
@@ -1148,6 +1124,11 @@ class UniversalLiveProgressDialog(ctk.CTkToplevel):
         threading.Thread(target=self._worker_wrapper, daemon=True).start()
 
     def update_status(self, current_b, total_b, start_t, item_name):
+        try:
+            if not self.winfo_exists(): return
+        except Exception:
+            return
+
         now = time.time()
         if (now - self.last_update_t) < 0.035 and current_b < total_b:
             return
@@ -1166,11 +1147,21 @@ class UniversalLiveProgressDialog(ctk.CTkToplevel):
         tot_mb = round(total_b / (1024 * 1024), 1)
         speed_mb = round(speed / (1024 * 1024), 1)
 
-        self.after(0, lambda: self.progress_bar.set(pct))
-        self.after(0, lambda: self.lbl_file.configure(text=f"Processing: {item_name[:32]} ({int(pct*100)}%)"))
-        self.after(0, lambda: self.lbl_stats.configure(
-            text=f"Size: {cur_mb} MB / {tot_mb} MB  |  Speed: {speed_mb} MB/s  |  Est: {mins:02d}:{secs:02d}"
-        ))
+        def _do_update():
+            try:
+                if self.winfo_exists():
+                    self.progress_bar.set(pct)
+                    self.lbl_file.configure(text=f"Processing: {item_name[:32]} ({int(pct*100)}%)")
+                    self.lbl_stats.configure(
+                        text=f"Size: {cur_mb} MB / {tot_mb} MB  |  Speed: {speed_mb} MB/s  |  Est: {mins:02d}:{secs:02d}"
+                    )
+            except Exception:
+                pass
+
+        try:
+            self.after(0, _do_update)
+        except Exception:
+            pass
 
     def _worker_wrapper(self):
         try:
@@ -1178,20 +1169,25 @@ class UniversalLiveProgressDialog(ctk.CTkToplevel):
         except Exception as e:
             print(f"Task error: {e}")
         finally:
-            self.after(0, self._cleanup_and_close)
+            try:
+                self.after(0, self._cleanup_and_close)
+            except Exception:
+                pass
 
     def _cleanup_and_close(self):
         try:
-            self.progress_bar.set(1.0)
-            self.destroy()
-            if self.master:
-                self.master.destroy()
+            if self.winfo_exists():
+                self.progress_bar.set(1.0)
+                self.destroy()
         except Exception:
             pass
+        if self.on_done:
+            try: self.on_done()
+            except Exception: pass
 
 
 # =============================================================================
-# MAIN GUI APPLICATION CLASS (WINDOWS 11 FLUENT DARK)
+# MAIN GUI APPLICATION CLASS
 # =============================================================================
 class FusionZipApp(ctk.CTk):
     def __init__(self):
@@ -1206,15 +1202,14 @@ class FusionZipApp(ctk.CTk):
         center_window_on_screen(self, 880, 580)
         apply_windows_dark_titlebar(self)
 
-        # Application Navigation State
         self.queue_items = []
         self.current_folder_view = None
         self.history_back = []
         self.history_forward = []
         self.last_output_dir = None
         self.is_processing = False
+        self.user_edited_name = False
 
-        # Build Fluent UI Components
         self._build_top_command_bar()
         self._build_data_grid()
         self._build_linear_control_row()
@@ -1224,7 +1219,6 @@ class FusionZipApp(ctk.CTk):
         self._refresh_grid()
 
     def _build_top_command_bar(self):
-        """Windows 11 Command Bar and Breadcrumb Capsule."""
         top_command_card = ctk.CTkFrame(
             self, fg_color=COLOR_TOP_CHROME, corner_radius=0, height=48,
             border_width=1, border_color=COLOR_BORDER
@@ -1255,7 +1249,6 @@ class FusionZipApp(ctk.CTk):
         self.lbl_location.pack(side="left", padx=12, fill="x", expand=True)
 
     def _build_data_grid(self):
-        """Windows 11 Elevated List View Container."""
         self.grid_card = ctk.CTkFrame(
             self, fg_color=COLOR_CARD_BG, corner_radius=10,
             border_width=1, border_color=COLOR_BORDER
@@ -1268,7 +1261,7 @@ class FusionZipApp(ctk.CTk):
         )
         self.hdr_frame.pack(fill="x", padx=8, pady=(8, 4))
 
-        hdr_name = ctk.CTkLabel(self.hdr_frame, text="Name 🔼", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, anchor="w")
+        hdr_name = ctk.CTkLabel(self.hdr_frame, text="Name", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, anchor="w")
         hdr_name.pack(side="left", padx=15, expand=True, fill="x")
 
         hdr_size = ctk.CTkLabel(self.hdr_frame, text="Size", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, width=95, anchor="e")
@@ -1290,7 +1283,6 @@ class FusionZipApp(ctk.CTk):
         self.scroll_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
     def _build_linear_control_row(self):
-        """Windows 11 Bottom Control Panel."""
         ctrl_card = ctk.CTkFrame(
             self, fg_color=COLOR_CARD_BG, corner_radius=10,
             border_width=1, border_color=COLOR_BORDER
@@ -1314,7 +1306,8 @@ class FusionZipApp(ctk.CTk):
             border_width=1, border_color=COLOR_BORDER, corner_radius=6, width=160, height=32, placeholder_text="Archive.zip"
         )
         self.archive_name_entry.pack(side="left")
-        FloatingTooltip(self.archive_name_entry, "Type a custom name for your compressed zip file.")
+        self.archive_name_entry.bind("<Key>", self._on_name_entry_key)
+        FloatingTooltip(self.archive_name_entry, "Type a custom name for your compressed archive.")
 
         # Password Field
         pwd_frame = ctk.CTkFrame(left_box, fg_color="transparent")
@@ -1327,7 +1320,8 @@ class FusionZipApp(ctk.CTk):
             border_width=1, border_color=COLOR_BORDER, corner_radius=6, width=140, height=32, placeholder_text="Optional Password"
         )
         self.pwd_entry.pack(side="left")
-        FloatingTooltip(self.pwd_entry, "Typing a password locks both file contents and file names.")
+        self.pwd_entry.bind("<KeyRelease>", self._on_password_changed)
+        FloatingTooltip(self.pwd_entry, "Sets true AES-256 encryption. Requires password to extract.")
 
         self.btn_toggle_pwd = ctk.CTkButton(
             pwd_frame, text="👁️", fg_color=COLOR_FIELD_BG, hover_color=COLOR_ROW_HOVER,
@@ -1357,7 +1351,6 @@ class FusionZipApp(ctk.CTk):
         self.btn_extract.pack(side="left", padx=4)
 
     def _build_status_and_progress_strip(self):
-        """Windows 11 Explorer Status Bar."""
         self.status_strip = ctk.CTkFrame(self, fg_color="transparent")
         self.status_strip.pack(fill="x", padx=16, pady=(0, 6))
 
@@ -1378,6 +1371,22 @@ class FusionZipApp(ctk.CTk):
             self.status_strip, fg_color=COLOR_FIELD_BG, progress_color=COLOR_BLUE_ACCENT, height=6, width=240, corner_radius=3
         )
 
+    def _on_name_entry_key(self, event=None):
+        self.user_edited_name = True
+
+    def _on_password_changed(self, event=None):
+        pwd = self.pwd_entry.get().strip()
+        cur_name = self.archive_name_entry.get().strip()
+        if not cur_name:
+            return
+        base, ext = os.path.splitext(cur_name)
+        if pwd and ext.lower() == ".zip":
+            self.archive_name_entry.delete(0, tk.END)
+            self.archive_name_entry.insert(0, f"{base}.fzip")
+        elif not pwd and ext.lower() in [".fzip", ".fz"]:
+            self.archive_name_entry.delete(0, tk.END)
+            self.archive_name_entry.insert(0, f"{base}.zip")
+
     def toggle_password_visibility(self):
         if self.pwd_entry.cget("show") == "•":
             self.pwd_entry.configure(show="")
@@ -1387,7 +1396,6 @@ class FusionZipApp(ctk.CTk):
             self.btn_toggle_pwd.configure(text="👁️")
 
     def handle_mouse_nav(self, direction):
-        """Processes hardware side mouse button clicks (Thumb 1: Back, Thumb 2: Forward)."""
         try:
             if direction == "back":
                 if self.history_back:
@@ -1415,6 +1423,7 @@ class FusionZipApp(ctk.CTk):
             for f in files:
                 if not any(x["path"] == f for x in self.queue_items):
                     self.queue_items.append({"path": f})
+            self._update_default_archive_name()
             self._refresh_grid()
 
     def on_files_dropped(self, file_paths):
@@ -1425,13 +1434,27 @@ class FusionZipApp(ctk.CTk):
                 self.queue_items.append({"path": clean_p})
                 added = True
         if added:
+            self._update_default_archive_name()
             self._refresh_grid()
+
+    def _update_default_archive_name(self):
+        if not self.user_edited_name and len(self.queue_items) > 0:
+            first_base = os.path.basename(os.path.abspath(self.queue_items[0]["path"]))
+            stem = first_base if os.path.isdir(self.queue_items[0]["path"]) else os.path.splitext(first_base)[0]
+            ext = ".fzip" if self.pwd_entry.get().strip() else ".zip"
+            self.archive_name_entry.delete(0, tk.END)
+            self.archive_name_entry.insert(0, f"{stem}{ext}")
 
     def remove_item(self, target_path):
         if self.current_folder_view:
             messagebox.showinfo("Queue Notice", "Items inside subfolders are part of the active folder structure.")
             return
         self.queue_items = [x for x in self.queue_items if x["path"] != target_path]
+        if not self.queue_items:
+            self.user_edited_name = False
+            self.archive_name_entry.delete(0, tk.END)
+        else:
+            self._update_default_archive_name()
         self._refresh_grid()
 
     def open_output_folder(self):
@@ -1457,7 +1480,6 @@ class FusionZipApp(ctk.CTk):
         self.inspect_folder(archive_path)
 
     def step_up_folder(self):
-        """Returns to main staging queue when stepping up from a top-level queued item."""
         if self.current_folder_view:
             self.history_back.append(self.current_folder_view)
             self.history_forward.clear()
@@ -1509,7 +1531,10 @@ class FusionZipApp(ctk.CTk):
 
                 elif ext == ".zip" or (os.path.isfile(self.current_folder_view) and ext != ""):
                     pwd_b = pwd.encode('utf-8') if pwd else None
-                    zf = pyzipper.AESZipFile(self.current_folder_view, 'r') if HAS_PYZIPPER else zipfile.ZipFile(self.current_folder_view, 'r')
+                    if HAS_PYZIPPER:
+                        zf = pyzipper.AESZipFile(self.current_folder_view, 'r')
+                    else:
+                        zf = zipfile.ZipFile(self.current_folder_view, 'r')
                     if pwd_b: zf.setpassword(pwd_b)
                     for info in zf.infolist():
                         self._render_generic_member_row(info.filename, info.file_size)
@@ -1534,15 +1559,11 @@ class FusionZipApp(ctk.CTk):
             )
             empty_card.pack(fill="x", expand=True, padx=40, pady=50)
 
-            ctk.CTkLabel(
-                empty_card, text="📥", font=ctk.CTkFont(size=36)
-            ).pack(pady=(28, 4))
-
+            ctk.CTkLabel(empty_card, text="📥", font=ctk.CTkFont(size=36)).pack(pady=(28, 4))
             ctk.CTkLabel(
                 empty_card, text="Drag & Drop Files or Folders Here",
                 font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_TEXT_PRIMARY
             ).pack(pady=(0, 2))
-
             ctk.CTkLabel(
                 empty_card, text="or click '+ Add Items' above to stage files for compression & extraction",
                 font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=COLOR_TEXT_MUTED
@@ -1562,13 +1583,6 @@ class FusionZipApp(ctk.CTk):
 
         for item in self.queue_items:
             self._render_grid_row(item["path"], is_inside=False)
-
-        if count > 0:
-            first_base = os.path.basename(os.path.abspath(self.queue_items[0]["path"]))
-            suggested = f"{os.path.splitext(first_base)[0]}.zip"
-            if not self.archive_name_entry.get().strip():
-                self.archive_name_entry.delete(0, tk.END)
-                self.archive_name_entry.insert(0, suggested)
 
         self.btn_compress.configure(
             state="normal", fg_color=COLOR_BLUE_ACCENT, hover_color=COLOR_BLUE_HOVER,
@@ -1719,7 +1733,7 @@ class FusionZipApp(ctk.CTk):
         date_lbl.pack(side="left", padx=10)
 
     # -------------------------------------------------------------------------
-    # DUAL-MODE COMPRESSION WORKER (MAIN GUI)
+    # DUAL-MODE COMPRESSION WORKER
     # -------------------------------------------------------------------------
     def start_compression_thread(self):
         if self.is_processing:
@@ -1731,7 +1745,8 @@ class FusionZipApp(ctk.CTk):
         elif len(self.queue_items) > 0:
             targets = [x["path"] for x in self.queue_items if os.path.exists(x["path"])]
             first_item = targets[0]
-            default_name = f"{os.path.splitext(os.path.basename(first_item))[0]}.zip"
+            stem = os.path.basename(first_item) if os.path.isdir(first_item) else os.path.splitext(os.path.basename(first_item))[0]
+            default_name = f"{stem}.zip"
         else:
             return
 
@@ -1748,24 +1763,31 @@ class FusionZipApp(ctk.CTk):
         elif not password and custom_name.lower().endswith(".fzip"):
             custom_name = custom_name[:-5] + ".zip"
 
-        if not custom_name.lower().endswith((".zip", ".fzip")):
+        if not custom_name.lower().endswith((".zip", ".fzip", ".7z")):
             custom_name += ext
 
         out_archive = filedialog.asksaveasfilename(
             defaultextension=ext,
-            filetypes=[("Fusion Vault Archive", "*.fzip"), ("ZIP Archive", "*.zip")],
+            filetypes=[("Fusion Vault Archive", "*.fzip"), ("ZIP Archive", "*.zip"), ("7-Zip Archive", "*.7z")],
             title="Save Archive As", initialfile=custom_name
         )
         if not out_archive:
             return
 
         self.last_output_dir = os.path.dirname(os.path.abspath(out_archive))
-        run_live_compress(targets, os.path.basename(out_archive), self.last_output_dir, password)
-        self.lbl_status.configure(text=f"Ready | Created {os.path.basename(out_archive)}")
-        self.btn_open_folder.pack(side="right", padx=10)
+
+        def _on_done():
+            try:
+                if self.winfo_exists():
+                    self.lbl_status.configure(text=f"Ready | Created {os.path.basename(out_archive)}")
+                    self.btn_open_folder.pack(side="right", padx=10)
+            except Exception:
+                pass
+
+        run_live_compress(targets, os.path.basename(out_archive), self.last_output_dir, password, parent=self, on_done=_on_done)
 
     # -------------------------------------------------------------------------
-    # UNIVERSAL EXTRACTION WORKER (MAIN GUI)
+    # UNIVERSAL EXTRACTION WORKER
     # -------------------------------------------------------------------------
     def start_extraction_thread(self):
         if self.is_processing:
@@ -1792,19 +1814,27 @@ class FusionZipApp(ctk.CTk):
             return
 
         self.last_output_dir = target_dir
-        run_live_extract_folder(target_archive, target_dir, password)
-        self.lbl_status.configure(text="Extraction complete!")
-        self.btn_open_folder.pack(side="right", padx=10)
+
+        def _on_done():
+            try:
+                if self.winfo_exists():
+                    self.lbl_status.configure(text="Extraction complete!")
+                    self.btn_open_folder.pack(side="right", padx=10)
+            except Exception:
+                pass
+
+        run_live_extract_folder(target_archive, target_dir, password, parent=self, on_done=_on_done)
 
 
 # =============================================================================
-# LIVE WORKERS (COMPRESS, EXTRACT, UNPACK) WITH CHUNK STREAMING
+# LIVE WORKERS (ASYNC PROGRESS STREAMING)
 # =============================================================================
-def run_live_compress(targets, archive_name, target_dir, password=None):
-    """Executes compression with chunked byte streaming."""
+def run_live_compress(targets, archive_name, target_dir, password=None, parent=None, on_done=None):
+    """Executes compression without freezing the GUI event loop."""
     def task(update_fn, is_cancelled_fn):
         os.makedirs(target_dir, exist_ok=True)
         out_abs = os.path.join(target_dir, archive_name)
+        ext = os.path.splitext(archive_name)[1].lower()
 
         total_bytes = 0
         valid_files = [x for x in targets if os.path.exists(x)]
@@ -1816,12 +1846,14 @@ def run_live_compress(targets, archive_name, target_dir, password=None):
                     for f in files:
                         total_bytes += os.path.getsize(os.path.join(root, f))
 
+        total_bytes = max(1, total_bytes)
         processed_bytes = 0
         start_time = time.time()
+        is_single_folder = (len(valid_files) == 1 and os.path.isdir(valid_files[0]))
 
-        if password and HAS_PY7ZR:
-            filters = [{'id': py7zr.FILTER_LZMA2}, {'id': py7zr.FILTER_CRYPTO_AES256_SHA256}]
-            with py7zr.SevenZipFile(out_abs, 'w', password=password, header_encryption=True, filters=filters) as szf:
+        # Vault / 7z Mode
+        if (ext in [".fzip", ".fz", ".7z"] or (password and not ext == ".zip")) and HAS_PY7ZR:
+            with py7zr.SevenZipFile(out_abs, 'w', password=password or None, header_encryption=bool(password)) as szf:
                 for target in valid_files:
                     if is_cancelled_fn(): break
                     target_abs = os.path.abspath(target)
@@ -1834,17 +1866,52 @@ def run_live_compress(targets, archive_name, target_dir, password=None):
                         szf.write(target_abs, os.path.basename(target_abs))
 
                     elif os.path.isdir(target_abs):
+                        base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
+                        has_items = False
                         for root, dirs, files in os.walk(target_abs):
                             if is_cancelled_fn(): break
+                            for d in dirs:
+                                dir_path = os.path.join(root, d)
+                                rel_dir = os.path.relpath(dir_path, base_root)
+                                if rel_dir != ".":
+                                    szf.write(dir_path, rel_dir)
+                                    has_items = True
                             for file in files:
                                 full_p = os.path.abspath(os.path.join(root, file))
                                 if full_p == out_abs: continue
                                 processed_bytes += os.path.getsize(full_p)
-                                rel_p = os.path.relpath(full_p, os.path.dirname(target_abs))
+                                rel_p = os.path.relpath(full_p, base_root)
                                 update_fn(processed_bytes, total_bytes, start_time, file)
                                 szf.write(full_p, rel_p)
+                                has_items = True
+                        if not has_items:
+                            szf.write(target_abs, "" if is_single_folder else os.path.basename(target_abs))
+
+        # ZIP Mode
         else:
-            zf = zipfile.ZipFile(out_abs, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1)
+            if password:
+                if HAS_PYZIPPER:
+                    zf = pyzipper.AESZipFile(out_abs, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES)
+                    zf.setpassword(password.encode('utf-8'))
+                    zf.setencryption(pyzipper.WZ_AES, nbits=256)
+                elif HAS_PY7ZR:
+                    with py7zr.SevenZipFile(out_abs, 'w', password=password, header_encryption=True) as szf:
+                        for target in valid_files:
+                            target_abs = os.path.abspath(target)
+                            if os.path.isfile(target_abs):
+                                szf.write(target_abs, os.path.basename(target_abs))
+                            elif os.path.isdir(target_abs):
+                                base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
+                                for root, dirs, files in os.walk(target_abs):
+                                    for file in files:
+                                        full_p = os.path.join(root, file)
+                                        szf.write(full_p, os.path.relpath(full_p, base_root))
+                    return
+                else:
+                    raise Exception("pyzipper or py7zr required for password encryption.")
+            else:
+                zf = zipfile.ZipFile(out_abs, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1)
+
             for target in valid_files:
                 if is_cancelled_fn(): break
                 target_abs = os.path.abspath(target)
@@ -1857,43 +1924,64 @@ def run_live_compress(targets, archive_name, target_dir, password=None):
                     zf.write(target_abs, os.path.basename(target_abs))
 
                 elif os.path.isdir(target_abs):
+                    base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
+                    has_items = False
                     for root, dirs, files in os.walk(target_abs):
                         if is_cancelled_fn(): break
+                        for d in dirs:
+                            dir_path = os.path.join(root, d)
+                            rel_dir = os.path.relpath(dir_path, base_root)
+                            if rel_dir != ".":
+                                zf.write(dir_path, rel_dir + "/")
+                                has_items = True
                         for file in files:
                             full_p = os.path.abspath(os.path.join(root, file))
                             if full_p == out_abs: continue
                             processed_bytes += os.path.getsize(full_p)
-                            rel_p = os.path.relpath(full_p, os.path.dirname(target_abs))
+                            rel_p = os.path.relpath(full_p, base_root)
                             update_fn(processed_bytes, total_bytes, start_time, file)
                             zf.write(full_p, rel_p)
+                            has_items = True
+                    if not has_items and not is_single_folder:
+                        zf.write(target_abs, os.path.basename(target_abs) + "/")
             zf.close()
 
-    app = ctk.CTk()
-    app.withdraw()
-    dlg = UniversalLiveProgressDialog(app, f"Packaging '{archive_name[:30]}'...", task)
-    dlg.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    standalone = False
+    if not parent:
+        parent = ctk.CTk()
+        parent.withdraw()
+        standalone = True
+
+    def _cleanup():
+        if on_done:
+            try: on_done()
+            except Exception: pass
+        if standalone:
+            try: parent.destroy()
+            except Exception: pass
+
+    dlg = UniversalLiveProgressDialog(parent, f"Packaging '{archive_name[:30]}'...", task, on_done=_cleanup)
+    if standalone:
+        parent.mainloop()
 
 
-def run_live_extract_folder(archive_path, destination_dir, password=None):
-    """Extracts archive directly with live chunked streaming, file collisions, and lazy folder creation."""
+def run_live_extract_folder(archive_path, destination_dir, password=None, parent=None, on_done=None):
     if not os.path.exists(archive_path): return
 
     conflict_state = ConflictState()
 
-    # Pre-flight Root Destination Conflict Check
     if os.path.exists(destination_dir) and os.path.isdir(destination_dir) and os.listdir(destination_dir):
-        choice = prompt_file_conflict(destination_dir, {"size": 0, "is_folder": True, "time": "Existing Directory"}, conflict_state)
+        choice = prompt_file_conflict(destination_dir, {"size": 0, "is_folder": True, "time": "Existing Directory"}, conflict_state, parent)
         if choice == "skip":
             return
         elif choice == "keep_both":
-            parent = os.path.dirname(destination_dir)
+            parent_dir = os.path.dirname(destination_dir)
             base = os.path.basename(destination_dir)
             c = 1
-            new_dest = os.path.join(parent, f"{base} ({c})")
+            new_dest = os.path.join(parent_dir, f"{base} ({c})")
             while os.path.exists(new_dest):
                 c += 1
-                new_dest = os.path.join(parent, f"{base} ({c})")
+                new_dest = os.path.join(parent_dir, f"{base} ({c})")
             destination_dir = new_dest
 
     def task(update_fn, is_cancelled_fn):
@@ -1904,7 +1992,7 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
         if os.path.isdir(archive_path):
             folder_name = os.path.basename(os.path.abspath(archive_path))
             dest_folder = os.path.join(destination_dir, folder_name)
-            final_folder, status = resolve_collision_path(dest_folder, {"size": 0, "is_folder": True, "time": "Folder"}, conflict_state)
+            final_folder, status = resolve_collision_path(dest_folder, {"size": 0, "is_folder": True, "time": "Folder"}, conflict_state, parent)
             if status == "write":
                 total_bytes = sum(os.path.getsize(os.path.join(r, f)) for r, d, files in os.walk(archive_path) for f in files)
                 processed = 0
@@ -1925,14 +2013,15 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
                                 update_fn(processed, total_bytes, start_time, f)
             return
 
-        # Archive formats with fast chunked extraction
-        if ext in [".7z", ".fz", ".fzip"] and HAS_PY7ZR:
+        # 7z / .fzip Extraction
+        if (ext in [".7z", ".fz", ".fzip"] or (HAS_PY7ZR and py7zr.is_7zfile(archive_path))) and HAS_PY7ZR:
             with py7zr.SevenZipFile(archive_path, 'r', password=password or None) as szf:
                 infos = szf.list()
                 total_bytes = sum(i.uncompressed for i in infos if not i.is_directory) or 1
                 szf.extractall(path=destination_dir)
                 update_fn(total_bytes, total_bytes, start_time, os.path.basename(archive_path))
 
+        # RAR Extraction
         elif ext == ".rar" and HAS_RARFILE:
             with rarfile.RarFile(archive_path, 'r') as rf:
                 if password: rf.setpassword(password)
@@ -1944,7 +2033,7 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
                     if info.isdir(): continue
                     out_path = os.path.join(destination_dir, info.filename)
                     in_info = {"size": info.file_size, "time": str(info.date_time)}
-                    final_path, status = resolve_collision_path(out_path, in_info, conflict_state)
+                    final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                     if status == "write":
                         os.makedirs(os.path.dirname(final_path), exist_ok=True)
                         with rf.open(info) as src, open(final_path, 'wb') as dst:
@@ -1959,6 +2048,7 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
                         processed += info.file_size
                         update_fn(processed, total_bytes, start_time, os.path.basename(info.filename))
 
+        # TAR Formats
         elif ext in [".tar", ".gz", ".bz2", ".xz"]:
             with tarfile.open(archive_path, 'r:*') as tf:
                 members = tf.getmembers()
@@ -1969,7 +2059,7 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
                     if not member.isfile(): continue
                     out_path = os.path.join(destination_dir, member.name)
                     in_info = {"size": member.size, "time": str(member.mtime)}
-                    final_path, status = resolve_collision_path(out_path, in_info, conflict_state)
+                    final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                     if status == "write":
                         os.makedirs(os.path.dirname(final_path), exist_ok=True)
                         f_src = tf.extractfile(member)
@@ -1986,9 +2076,16 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
                         processed += member.size
                         update_fn(processed, total_bytes, start_time, os.path.basename(member.name))
 
+        # Standard / AES-256 ZIP Extraction
         else:
-            zf = pyzipper.AESZipFile(archive_path, 'r') if HAS_PYZIPPER else zipfile.ZipFile(archive_path, 'r')
-            if password: zf.setpassword(password.encode('utf-8'))
+            if HAS_PYZIPPER:
+                zf = pyzipper.AESZipFile(archive_path, 'r')
+            else:
+                zf = zipfile.ZipFile(archive_path, 'r')
+
+            if password:
+                zf.setpassword(password.encode('utf-8'))
+
             infos = zf.infolist()
             total_bytes = sum(i.file_size for i in infos if not i.is_dir()) or 1
             processed = 0
@@ -1997,7 +2094,7 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
                 if info.is_dir(): continue
                 out_path = os.path.join(destination_dir, info.filename)
                 in_info = {"size": info.file_size, "time": str(info.date_time)}
-                final_path, status = resolve_collision_path(out_path, in_info, conflict_state)
+                final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                 if status == "write":
                     os.makedirs(os.path.dirname(final_path), exist_ok=True)
                     with zf.open(info) as src, open(final_path, 'wb') as dst:
@@ -2013,17 +2110,27 @@ def run_live_extract_folder(archive_path, destination_dir, password=None):
                     update_fn(processed, total_bytes, start_time, os.path.basename(info.filename))
             zf.close()
 
-    app = ctk.CTk()
-    app.withdraw()
-    dlg = UniversalLiveProgressDialog(app, f"Extracting '{os.path.basename(archive_path)[:28]}'...", task)
-    dlg.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    standalone = False
+    if not parent:
+        parent = ctk.CTk()
+        parent.withdraw()
+        standalone = True
+
+    def _cleanup():
+        if on_done:
+            try: on_done()
+            except Exception: pass
+        if standalone:
+            try: parent.destroy()
+            except Exception: pass
+
+    dlg = UniversalLiveProgressDialog(parent, f"Extracting '{os.path.basename(archive_path)[:28]}'...", task, on_done=_cleanup)
+    if standalone:
+        parent.mainloop()
 
 
-def run_live_unpack_folder_batch(targets, destination_dir=None):
-    """1-Level Move Unpack with live progress and retry backoff."""
+def run_live_unpack_folder_batch(targets, destination_dir=None, parent=None, on_done=None):
     if not targets: return
-
     conflict_state = ConflictState()
 
     def task(update_fn, is_cancelled_fn):
@@ -2063,7 +2170,7 @@ def run_live_unpack_folder_batch(targets, destination_dir=None):
                                 if is_cancelled_fn(): break
                                 if not m.is_dir():
                                     out_p = os.path.join(out_dir, m.filename)
-                                    final_p, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state)
+                                    final_p, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
                                     if st == "write":
                                         os.makedirs(os.path.dirname(final_p), exist_ok=True)
                                         with zf.open(m) as s, open(final_p, 'wb') as d:
@@ -2076,7 +2183,7 @@ def run_live_unpack_folder_batch(targets, destination_dir=None):
             elif move_info[0] == "move":
                 _, src_p, dst_p, parent_folder = move_info
                 in_info = {"size": os.path.getsize(src_p) if os.path.isfile(src_p) else 0, "time": "Move"}
-                final_dst, status = resolve_collision_path(dst_p, in_info, conflict_state)
+                final_dst, status = resolve_collision_path(dst_p, in_info, conflict_state, parent)
                 if status == "write":
                     for attempt in range(4):
                         try:
@@ -2095,17 +2202,27 @@ def run_live_unpack_folder_batch(targets, destination_dir=None):
 
         update_fn(total_bytes, total_bytes, start_time, "Complete")
 
-    app = ctk.CTk()
-    app.withdraw()
-    dlg = UniversalLiveProgressDialog(app, "Unpack Folder...", task)
-    dlg.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    standalone = False
+    if not parent:
+        parent = ctk.CTk()
+        parent.withdraw()
+        standalone = True
+
+    def _cleanup():
+        if on_done:
+            try: on_done()
+            except Exception: pass
+        if standalone:
+            try: parent.destroy()
+            except Exception: pass
+
+    dlg = UniversalLiveProgressDialog(parent, "Unpack Folder...", task, on_done=_cleanup)
+    if standalone:
+        parent.mainloop()
 
 
-def run_live_unpack_all_folders_only(targets, destination_dir=None):
-    """Unpack All (Flattens all subfolders to top-level, keeping all ZIP archives intact)."""
+def run_live_unpack_all_folders_only(targets, destination_dir=None, parent=None, on_done=None):
     if not targets: return
-
     conflict_state = ConflictState()
 
     def task(update_fn, is_cancelled_fn):
@@ -2131,7 +2248,7 @@ def run_live_unpack_all_folders_only(targets, destination_dir=None):
                     dst_file = os.path.join(dest_dir, file_name)
                     if src_file != dst_file:
                         in_info = {"size": os.path.getsize(src_file) if os.path.isfile(src_file) else 0, "time": "Move"}
-                        final_dst, status = resolve_collision_path(dst_file, in_info, conflict_state)
+                        final_dst, status = resolve_collision_path(dst_file, in_info, conflict_state, parent)
                         if status == "write":
                             for _ in range(4):
                                 try:
@@ -2153,21 +2270,31 @@ def run_live_unpack_all_folders_only(targets, destination_dir=None):
                 except Exception: pass
 
             elif os.path.isfile(target_abs):
-                run_live_extract_folder(target_abs, dest_dir)
+                run_live_extract_folder(target_abs, dest_dir, parent=parent)
                 try: os.remove(target_abs)
                 except Exception: pass
 
-    app = ctk.CTk()
-    app.withdraw()
-    dlg = UniversalLiveProgressDialog(app, "Unpack All Subfolders...", task)
-    dlg.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    standalone = False
+    if not parent:
+        parent = ctk.CTk()
+        parent.withdraw()
+        standalone = True
+
+    def _cleanup():
+        if on_done:
+            try: on_done()
+            except Exception: pass
+        if standalone:
+            try: parent.destroy()
+            except Exception: pass
+
+    dlg = UniversalLiveProgressDialog(parent, "Unpack All Subfolders...", task, on_done=_cleanup)
+    if standalone:
+        parent.mainloop()
 
 
-def run_live_unpack_and_extract_all_batch(targets, destination_dir=None):
-    """Unpack & Extract All (Full Deep Clean: unzips all nested archives and flattens all folders)."""
+def run_live_unpack_and_extract_all_batch(targets, destination_dir=None, parent=None, on_done=None):
     if not targets: return
-
     conflict_state = ConflictState()
 
     def task(update_fn, is_cancelled_fn):
@@ -2191,7 +2318,7 @@ def run_live_unpack_and_extract_all_batch(targets, destination_dir=None):
                                     for m in zf.infolist():
                                         if not m.is_dir():
                                             out_p = os.path.join(root, m.filename)
-                                            fp, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state)
+                                            fp, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
                                             if st == "write":
                                                 os.makedirs(os.path.dirname(fp), exist_ok=True)
                                                 with zf.open(m) as s, open(fp, 'wb') as d:
@@ -2218,7 +2345,7 @@ def run_live_unpack_and_extract_all_batch(targets, destination_dir=None):
                     dst_file = os.path.join(dest_dir, file_name)
                     if src_file != dst_file:
                         in_info = {"size": os.path.getsize(src_file) if os.path.isfile(src_file) else 0, "time": "Deep Move"}
-                        final_dst, status = resolve_collision_path(dst_file, in_info, conflict_state)
+                        final_dst, status = resolve_collision_path(dst_file, in_info, conflict_state, parent)
                         if status == "write":
                             for _ in range(4):
                                 try:
@@ -2240,22 +2367,33 @@ def run_live_unpack_and_extract_all_batch(targets, destination_dir=None):
                 except Exception: pass
 
             elif os.path.isfile(target_abs):
-                run_live_extract_folder(target_abs, dest_dir)
+                run_live_extract_folder(target_abs, dest_dir, parent=parent)
                 try: os.remove(target_abs)
                 except Exception: pass
 
-    app = ctk.CTk()
-    app.withdraw()
-    dlg = UniversalLiveProgressDialog(app, "Unpack & Extract All...", task)
-    dlg.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    standalone = False
+    if not parent:
+        parent = ctk.CTk()
+        parent.withdraw()
+        standalone = True
+
+    def _cleanup():
+        if on_done:
+            try: on_done()
+            except Exception: pass
+        if standalone:
+            try: parent.destroy()
+            except Exception: pass
+
+    dlg = UniversalLiveProgressDialog(parent, "Unpack & Extract All...", task, on_done=_cleanup)
+    if standalone:
+        parent.mainloop()
 
 
 # =============================================================================
 # CLI INTERACTIVE HANDLERS & STANDALONE VAULT EXTRACTOR
 # =============================================================================
 def run_cli_open_vault(vault_path):
-    """Directly unlocks and extracts .fzip vault files without opening the heavy app."""
     if not os.path.exists(vault_path): return
 
     app = ctk.CTk()
@@ -2264,11 +2402,11 @@ def run_cli_open_vault(vault_path):
 
     def on_pwd(path, pwd):
         unlocked[0] = pwd
-        app.destroy()
 
     dialog = EncryptedArchiveDialog(app, vault_path, on_pwd)
-    dialog.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    dialog.wait_window()
+    try: app.destroy()
+    except Exception: pass
 
     if unlocked[0] is not None:
         target_dir = os.path.splitext(os.path.abspath(vault_path))[0]
@@ -2276,23 +2414,27 @@ def run_cli_open_vault(vault_path):
 
 
 def run_cli_compress_interactive(targets, default_target_dir=None):
-    """Prompts AddToArchiveDialog and then launches live compression."""
     if not targets: return
 
     app = ctk.CTk()
     app.withdraw()
+    chosen = [None, None, None]
 
     def on_confirm(archive_name, save_dir, password):
-        app.destroy()
-        run_live_compress(targets, archive_name, save_dir, password)
+        chosen[0] = archive_name
+        chosen[1] = save_dir
+        chosen[2] = password
 
     dialog = AddToArchiveDialog(app, targets, default_target_dir, on_confirm)
-    dialog.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-    app.mainloop()
+    dialog.wait_window()
+    try: app.destroy()
+    except Exception: pass
+
+    if chosen[0]:
+        run_live_compress(targets, chosen[0], chosen[1], chosen[2])
 
 
 def run_cli_extract_interactive(archive_path, target_dir):
-    """Interactive extraction with password check and live progress."""
     if not os.path.exists(archive_path): return
 
     password = None
@@ -2303,11 +2445,11 @@ def run_cli_extract_interactive(archive_path, target_dir):
 
         def on_pwd(path, pwd):
             unlocked[0] = pwd
-            app.destroy()
 
         dialog = EncryptedArchiveDialog(app, archive_path, on_pwd)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: app.destroy())
-        app.mainloop()
+        dialog.wait_window()
+        try: app.destroy()
+        except Exception: pass
 
         if unlocked[0] is None:
             return
@@ -2320,12 +2462,9 @@ def run_cli_extract_interactive(archive_path, target_dir):
 # SHELL REGISTRATION & FILE ASSOCIATION MODULE
 # =============================================================================
 def install_windows_shell_context_menu():
-    """Registers right-click context menus and associates .fzip with vault_icon.ico."""
     if not HAS_WINREG:
-        print("[!] Windows Registry module unavailable.")
         return
 
-    # Use permanent program directory for registry icons
     if getattr(sys, 'frozen', False):
         app_dir = os.path.dirname(sys.executable)
         cmd_prefix = f'"{sys.executable}"'
@@ -2396,16 +2535,16 @@ def install_windows_shell_context_menu():
             winreg.SetValueEx(k4, "MUIVerb", 0, winreg.REG_SZ, "Unpack Folder")
             winreg.SetValueEx(k4, "Icon", 0, winreg.REG_SZ, icon_unpack)
             c4 = winreg.CreateKey(k4, "command")
-            winreg.SetValue(c4, "", winreg.REG_SZ, f'{cmd_prefix} --unpack "%1"')
+            winreg.SetValue(c4, "", winreg.REG_SZ, f'{cmd_prefix} --unpack-folder "%1"')
 
-            # 5. Unpack All Subfolders (Keeps Zips Intact)
+            # 5. Unpack All Subfolders
             k4b = winreg.CreateKey(sub_shell, "04_UnpackAll")
             winreg.SetValueEx(k4b, "MUIVerb", 0, winreg.REG_SZ, "Unpack All Subfolders")
             winreg.SetValueEx(k4b, "Icon", 0, winreg.REG_SZ, icon_unpack)
             c4b = winreg.CreateKey(k4b, "command")
             winreg.SetValue(c4b, "", winreg.REG_SZ, f'{cmd_prefix} --unpack-all "%1"')
 
-            # 6. Unpack & Extract All (Deep Clean)
+            # 6. Unpack & Extract All
             k4c = winreg.CreateKey(sub_shell, "04b_UnpackExtractAll")
             winreg.SetValueEx(k4c, "MUIVerb", 0, winreg.REG_SZ, "Unpack && Extract All")
             winreg.SetValueEx(k4c, "Icon", 0, winreg.REG_SZ, icon_unpack)
@@ -2420,9 +2559,8 @@ def install_windows_shell_context_menu():
             winreg.SetValue(c5, "", winreg.REG_SZ, f'{cmd_prefix} --gui "%1"')
 
         except Exception as e:
-            print(f"[!] Registry warning: {e}")
+            print(f"Registry warning: {e}")
 
-    # Register .fzip File Association with custom vault_icon.ico
     try:
         fzip_key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\.fzip")
         winreg.SetValue(fzip_key, "", winreg.REG_SZ, "FusionZip.Vault")
@@ -2436,16 +2574,13 @@ def install_windows_shell_context_menu():
         shell_open_key = winreg.CreateKey(prog_key, r"shell\open\command")
         winreg.SetValue(shell_open_key, "", winreg.REG_SZ, f'{cmd_prefix} --open-vault "%1"')
     except Exception as e:
-        print(f"[!] .fzip Association warning: {e}")
+        print(f".fzip Association warning: {e}")
 
     if sys.platform == "win32":
         shell32.SHChangeNotify(0x08000000, 0, None, None)
 
-    print("[✓] Context menus & .fzip vault file icons registered successfully!")
-
 
 def uninstall_windows_shell_context_menu():
-    """Wipes Fusion Zip keys and .fzip associations from the Windows Registry."""
     if not HAS_WINREG: return
     registry_targets = [
         r"Software\Classes\Directory\shell\FusionZip",
@@ -2466,11 +2601,9 @@ def uninstall_windows_shell_context_menu():
         except Exception: pass
     if sys.platform == "win32":
         shell32.SHChangeNotify(0x08000000, 0, None, None)
-    print("[✓] Context menus & associations removed from Registry.")
 
 
 def try_send_ipc_gui(args):
-    """Sends paths to running Fusion Zip window via local socket."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.05)
@@ -2483,7 +2616,6 @@ def try_send_ipc_gui(args):
 
 
 def start_ipc_server_thread(app):
-    """Listens for new multi-select files and appends them to the running window queue."""
     def server_loop():
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2499,6 +2631,7 @@ def start_ipc_server_thread(app):
                         clean_p = p.strip("{}")
                         if os.path.exists(clean_p) and not any(x["path"] == clean_p for x in app.queue_items):
                             app.queue_items.append({"path": clean_p})
+                    app._update_default_archive_name()
                     app.after(0, app._refresh_grid)
                 conn.close()
         except Exception:
@@ -2516,7 +2649,7 @@ if __name__ == "__main__":
         args = sys.argv[2:]
 
         if sys.platform == "win32" and flag == "--gui" and args:
-            MUTEX_NAME = "Global\\FusionZip_SingleInstance_Mutex_1.0"
+            MUTEX_NAME = "Global\\FusionZip_SingleInstance_Mutex_2.0"
             kernel32 = ctypes.windll.kernel32
             mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
             last_error = kernel32.GetLastError()
@@ -2567,10 +2700,10 @@ if __name__ == "__main__":
             for archive_path in archive_paths:
                 run_cli_extract_interactive(archive_path, target_dir)
             sys.exit(0)
-        elif flag == "--unpack" and args:
+        elif flag in ["--unpack", "--unpack-folder"] and args:
             run_live_unpack_folder_batch(args)
             sys.exit(0)
-        elif flag == "--unpack-to" and len(args) >= 2:
+        elif flag in ["--unpack-to", "--unpack-folder-to"] and len(args) >= 2:
             target_dir = args[0]
             archive_paths = args[1:]
             run_live_unpack_folder_batch(archive_paths, destination_dir=target_dir)
@@ -2597,6 +2730,7 @@ if __name__ == "__main__":
             for arg in args:
                 if os.path.exists(arg):
                     app.queue_items.append({"path": arg})
+            app._update_default_archive_name()
             app._refresh_grid()
             app.mainloop()
             sys.exit(0)
