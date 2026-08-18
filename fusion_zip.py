@@ -818,7 +818,7 @@ class EncryptedArchiveDialog(ctk.CTkToplevel):
         pwd_row.pack(fill="x", padx=15, pady=5)
 
         self.pwd_entry = ctk.CTkEntry(
-            pwd_row, show="•", fg_color=COLOR_FIELD_BG, text_color=COLOR_TEXT_PRIMARY,
+            pwd_row, show="*", fg_color=COLOR_FIELD_BG, text_color=COLOR_TEXT_PRIMARY,
             border_width=1, border_color=COLOR_BORDER, corner_radius=6, font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             placeholder_text="Enter Password..."
         )
@@ -858,11 +858,11 @@ class EncryptedArchiveDialog(ctk.CTkToplevel):
         self.btn_unlock.pack(side="right")
 
     def toggle_password(self):
-        if self.pwd_entry.cget("show") == "•":
+        if self.pwd_entry.cget("show") == "*":
             self.pwd_entry.configure(show="")
             self.btn_toggle.configure(text="🔒")
         else:
-            self.pwd_entry.configure(show="•")
+            self.pwd_entry.configure(show="*")
             self.btn_toggle.configure(text="👁️")
 
     def attempt_unlock(self):
@@ -993,7 +993,7 @@ class AddToArchiveDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(pwd_row, text="Password:", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED).pack(side="left", padx=(0, 6))
         self.pwd_entry = ctk.CTkEntry(
-            pwd_row, show="•", fg_color=COLOR_FIELD_BG, text_color=COLOR_TEXT_PRIMARY,
+            pwd_row, show="*", fg_color=COLOR_FIELD_BG, text_color=COLOR_TEXT_PRIMARY,
             border_width=1, border_color=COLOR_BORDER, corner_radius=6, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             placeholder_text="Optional Password..."
         )
@@ -1040,11 +1040,11 @@ class AddToArchiveDialog(ctk.CTkToplevel):
             self.name_entry.insert(0, f"{base}.zip")
 
     def toggle_pwd(self):
-        if self.pwd_entry.cget("show") == "•":
+        if self.pwd_entry.cget("show") == "*":
             self.pwd_entry.configure(show="")
             self.btn_toggle.configure(text="🔒")
         else:
-            self.pwd_entry.configure(show="•")
+            self.pwd_entry.configure(show="*")
             self.btn_toggle.configure(text="👁️")
 
     def browse_location(self):
@@ -1316,7 +1316,7 @@ class FusionZipApp(ctk.CTk):
         ctk.CTkLabel(pwd_frame, text="Password:", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED).pack(side="left", padx=(0, 6))
 
         self.pwd_entry = ctk.CTkEntry(
-            pwd_frame, show="•", fg_color=COLOR_FIELD_BG, text_color=COLOR_TEXT_PRIMARY,
+            pwd_frame, show="*", fg_color=COLOR_FIELD_BG, text_color=COLOR_TEXT_PRIMARY,
             border_width=1, border_color=COLOR_BORDER, corner_radius=6, width=140, height=32, placeholder_text="Optional Password"
         )
         self.pwd_entry.pack(side="left")
@@ -1388,11 +1388,11 @@ class FusionZipApp(ctk.CTk):
             self.archive_name_entry.insert(0, f"{base}.zip")
 
     def toggle_password_visibility(self):
-        if self.pwd_entry.cget("show") == "•":
+        if self.pwd_entry.cget("show") == "*":
             self.pwd_entry.configure(show="")
             self.btn_toggle_pwd.configure(text="🔒")
         else:
-            self.pwd_entry.configure(show="•")
+            self.pwd_entry.configure(show="*")
             self.btn_toggle_pwd.configure(text="👁️")
 
     def handle_mouse_nav(self, direction):
@@ -1969,35 +1969,25 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
     if not os.path.exists(archive_path): return
 
     conflict_state = ConflictState()
-
-    if os.path.exists(destination_dir) and os.path.isdir(destination_dir) and os.listdir(destination_dir):
-        choice = prompt_file_conflict(destination_dir, {"size": 0, "is_folder": True, "time": "Existing Directory"}, conflict_state, parent)
-        if choice == "skip":
-            return
-        elif choice == "keep_both":
-            parent_dir = os.path.dirname(destination_dir)
-            base = os.path.basename(destination_dir)
-            c = 1
-            new_dest = os.path.join(parent_dir, f"{base} ({c})")
-            while os.path.exists(new_dest):
-                c += 1
-                new_dest = os.path.join(parent_dir, f"{base} ({c})")
-            destination_dir = new_dest
+    os.makedirs(destination_dir, exist_ok=True)
 
     def task(update_fn, is_cancelled_fn):
         ext = os.path.splitext(archive_path)[1].lower()
         start_time = time.time()
         CHUNK_SIZE = 8 * 1024 * 1024
+        dest_abs = os.path.abspath(destination_dir)
 
         if os.path.isdir(archive_path):
             folder_name = os.path.basename(os.path.abspath(archive_path))
             dest_folder = os.path.join(destination_dir, folder_name)
             final_folder, status = resolve_collision_path(dest_folder, {"size": 0, "is_folder": True, "time": "Folder"}, conflict_state, parent)
             if status == "write":
-                total_bytes = sum(os.path.getsize(os.path.join(r, f)) for r, d, files in os.walk(archive_path) for f in files)
+                total_bytes = sum(os.path.getsize(os.path.join(r, f)) for r, d, files in os.walk(archive_path) for f in files) or 1
                 processed = 0
                 for root, dirs, files in os.walk(archive_path):
                     if is_cancelled_fn(): break
+                    for d in dirs:
+                        os.makedirs(os.path.join(final_folder, os.path.relpath(os.path.join(root, d), archive_path)), exist_ok=True)
                     for f in files:
                         src_f = os.path.join(root, f)
                         rel_f = os.path.relpath(src_f, archive_path)
@@ -2024,14 +2014,24 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
         # RAR Extraction
         elif ext == ".rar" and HAS_RARFILE:
             with rarfile.RarFile(archive_path, 'r') as rf:
-                if password: rf.setpassword(password)
+                if password: rf.setpassword(pwd)
                 infos = rf.infolist()
                 total_bytes = sum(i.file_size for i in infos if not i.isdir()) or 1
                 processed = 0
                 for info in infos:
                     if is_cancelled_fn(): break
-                    if info.isdir(): continue
-                    out_path = os.path.join(destination_dir, info.filename)
+                    clean_name = info.filename.replace('\\', '/')
+                    out_path = os.path.join(destination_dir, clean_name)
+
+                    # Zip Slip Guard
+                    if not os.path.abspath(out_path).startswith(dest_abs):
+                        continue
+
+                    # Create empty directories
+                    if info.isdir() or clean_name.endswith('/'):
+                        os.makedirs(out_path, exist_ok=True)
+                        continue
+
                     in_info = {"size": info.file_size, "time": str(info.date_time)}
                     final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                     if status == "write":
@@ -2056,8 +2056,19 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
                 processed = 0
                 for member in members:
                     if is_cancelled_fn(): break
-                    if not member.isfile(): continue
                     out_path = os.path.join(destination_dir, member.name)
+
+                    # Zip Slip Guard
+                    if not os.path.abspath(out_path).startswith(dest_abs):
+                        continue
+
+                    # Create empty directories
+                    if member.isdir():
+                        os.makedirs(out_path, exist_ok=True)
+                        continue
+
+                    if not member.isfile(): continue
+
                     in_info = {"size": member.size, "time": str(member.mtime)}
                     final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                     if status == "write":
@@ -2091,8 +2102,18 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
             processed = 0
             for info in infos:
                 if is_cancelled_fn(): break
-                if info.is_dir(): continue
-                out_path = os.path.join(destination_dir, info.filename)
+                clean_name = info.filename.replace('\\', '/')
+                out_path = os.path.join(destination_dir, clean_name)
+
+                # Zip Slip Guard
+                if not os.path.abspath(out_path).startswith(dest_abs):
+                    continue
+
+                # Create empty directories
+                if info.is_dir() or clean_name.endswith('/'):
+                    os.makedirs(out_path, exist_ok=True)
+                    continue
+
                 in_info = {"size": info.file_size, "time": str(info.date_time)}
                 final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                 if status == "write":
@@ -2168,13 +2189,17 @@ def run_live_unpack_folder_batch(targets, destination_dir=None, parent=None, on_
                         with zipfile.ZipFile(arch_path, 'r') as zf:
                             for m in zf.infolist():
                                 if is_cancelled_fn(): break
-                                if not m.is_dir():
-                                    out_p = os.path.join(out_dir, m.filename)
-                                    final_p, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
-                                    if st == "write":
-                                        os.makedirs(os.path.dirname(final_p), exist_ok=True)
-                                        with zf.open(m) as s, open(final_p, 'wb') as d:
-                                            shutil.copyfileobj(s, d)
+                                clean_name = m.filename.replace('\\', '/')
+                                out_p = os.path.join(out_dir, clean_name)
+                                if m.is_dir() or clean_name.endswith('/'):
+                                    os.makedirs(out_p, exist_ok=True)
+                                    continue
+
+                                final_p, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
+                                if st == "write":
+                                    os.makedirs(os.path.dirname(final_p), exist_ok=True)
+                                    with zf.open(m) as s, open(final_p, 'wb') as d:
+                                        shutil.copyfileobj(s, d)
                                 processed_bytes += m.file_size
                                 update_fn(processed_bytes, total_bytes, start_time, os.path.basename(m.filename))
                         os.remove(arch_path)
@@ -2316,13 +2341,17 @@ def run_live_unpack_and_extract_all_batch(targets, destination_dir=None, parent=
                             try:
                                 with zipfile.ZipFile(f_path, 'r') as zf:
                                     for m in zf.infolist():
-                                        if not m.is_dir():
-                                            out_p = os.path.join(root, m.filename)
-                                            fp, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
-                                            if st == "write":
-                                                os.makedirs(os.path.dirname(fp), exist_ok=True)
-                                                with zf.open(m) as s, open(fp, 'wb') as d:
-                                                    shutil.copyfileobj(s, d)
+                                        clean_name = m.filename.replace('\\', '/')
+                                        out_p = os.path.join(root, clean_name)
+                                        if m.is_dir() or clean_name.endswith('/'):
+                                            os.makedirs(out_p, exist_ok=True)
+                                            continue
+
+                                        fp, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
+                                        if st == "write":
+                                            os.makedirs(os.path.dirname(fp), exist_ok=True)
+                                            with zf.open(m) as s, open(fp, 'wb') as d:
+                                                shutil.copyfileobj(s, d)
                                 os.remove(f_path)
                             except Exception: pass
                         elif ext in [".7z", ".fz", ".fzip"] and HAS_PY7ZR:
