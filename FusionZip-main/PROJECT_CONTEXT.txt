@@ -1,0 +1,127 @@
+===============================================================================
+FUSION ZIP v2.0 — MASTER ARCHITECTURE & PROJECT CONTEXT PROMPT
+===============================================================================
+
+PROJECT OVERVIEW:
+"Fusion Zip" (v2.0.0) is a dark-themed, Windows 11 Fluent archive manager and 
+custom 64-bit C++ COM shell extension engine built with Python (CustomTkinter) 
+and C++ (Win32 API). It features native Windows 11 Fluent Dark styling, 7-Zip 
+style right-click and drag-and-drop context menus with 32-bit transparent alpha 
+icons, real-time chunked progress streaming (zero freezing), AES-256 vault 
+encryption (.fzip), a safe 7-Zip style conflict resolution dialog, 3-tier 
+smart unpacking, and Inno Setup packaging.
+
+GitHub Repository: https://github.com/Fusionog21/FusionZip
+Target Platform: Windows 10 / Windows 11 64-bit (x64)
+
+-------------------------------------------------------------------------------
+MASTER PROJECT DIRECTORY LAYOUT (CLEAN SOURCE TREE):
+-------------------------------------------------------------------------------
+📁 GitHub FusionZip v2/
+ ├── fusion_zip.py          : Master Python GUI, CLI router, IPC socket, & worker engine.
+ ├── FusionZipShell.cpp     : C++ COM Shell Extension for Right-Click & Drag-and-Drop.
+ ├── FusionZipShell.dll     : Compiled 64-bit In-Process COM Shell Extension DLL.
+ ├── setup_script.iss       : Inno Setup 64-bit installer script for FusionZip_Setup.exe.
+ ├── icon.ico               : Master app & context menu icon (Glowing metallic "F" squircle).
+ ├── unpack_icon.ico        : Custom metallic wrench & crate icon for unpack actions.
+ ├── vault_icon.ico         : Custom white document with metallic "F" zipper for .fzip files.
+ ├── requirements.txt       : Python dependencies (customtkinter, pyzipper, py7zr, rarfile, pillow, pyinstaller).
+ ├── README.md              : Complete v2.0 documentation & installation instructions.
+ └── LICENSE.txt            : MIT Open-Source License.
+
+* Note: Compiled binaries (`dist/`, `build/`, `FusionZip_Setup.exe`, `FusionZip.spec`) 
+are intentionally excluded from Git source tracking and are served via GitHub Releases.
+
+-------------------------------------------------------------------------------
+KEY ARCHITECTURAL COMPONENTS & CORE MODULES:
+-------------------------------------------------------------------------------
+
+1. WINDOWS 11 FLUENT DARK UI & GDI+ PER-APPLICATION ICONS ENGINE:
+   - Palette: #12141d (Slate canvas), #181b27 (Cards), #202434 (Fields), #0078d4 (Accent Blue).
+   - Dynamic GDI+ (gdiplus.dll) Icon Extractor: Extracts authentic 32-bit ARGB alpha 
+     icons directly from Windows binary PE resources.
+   - Distinct Per-Executable Caching: Unique files (.exe, .lnk, .ico, .dll, .fzip) are 
+     cached by exact absolute path (`PATH_<path>_<size>`) rather than by extension, 
+     preventing icon collisions (e.g., Steam, Discord, Chrome retain their distinct logos).
+   - Direct Win32 `WM_SETICON`: Applied to root windows and all `CTkToplevel` popup 
+     dialogs to override CustomTkinter's default blue square icon.
+
+2. DUAL-MODE COMPRESSION & SEALED AES-256 VAULTS (.fzip / .zip):
+   - Unencrypted Mode: Standard Deflate `.zip` compatible with native Windows Explorer.
+   - Encrypted Vault Mode (.fzip / .zip): True AES-256 header encryption (via py7zr or 
+     pyzipper) locking file contents and filenames.
+   - Root Path Normalization: Single-folder compression stores items relative to the 
+     selected folder root, completely eliminating the `folder > folder > folder` 
+     double-nesting bug on extraction.
+   - Live Cryptographic Unlock: The unlock dialog tests the decryption key stream and 
+     distinguishes between genuine incorrect passwords and file format errors.
+
+3. 7-ZIP STYLE COMPACT CONFLICT RESOLUTION (520x370):
+   - Sized at 520x370 with zero button clipping.
+   - Side-by-side comparison tiles: Existing on Disk vs. Incoming from Archive.
+   - Shows exact sizes (MB + raw byte counts) and modification timestamps.
+   - Actions: Replace, Keep Both (auto-renames to "name (1).ext"), Skip + "Apply to all".
+
+4. 3-TIER UNPACKING ENGINE:
+   - ⚡ Unpack Folder          : 1-level move up to parent directory.
+   - 📂 Unpack All Subfolders  : Recursively flattens subdirectories, keeping .zip archives intact.
+   - 🧹 Unpack & Extract All   : Deep clean recursively flattening subfolders AND extracting archives.
+
+5. NON-BLOCKING LIVE PROGRESS STREAMING (ZERO FREEZING):
+   - Decoupled from `wait_window()`: Worker threads stream 8MB chunked telemetry to 
+     `UniversalLiveProgressDialog` while keeping the Tkinter event loop responsive.
+   - Auto-Closing: Automatically triggers completion callbacks (`on_done`), updates the 
+     parent window status bar, and closes the progress window instantly without hanging.
+
+6. C++ COM SHELL EXTENSION (FusionZipShell.cpp / FusionZipShell.dll):
+   - Win32 COM interfaces: `IShellExtInit`, `IContextMenu`, and `DragDropHandlers`.
+   - Converts icons into 32-bit PARGB DIBSections (eliminating dark/gray square borders).
+   - Registered under `Software\Classes\*\shell\FusionZip`, `Directory\shellex\DragDropHandlers`, etc.
+   - Automatically registered by `setup_script.iss` using Inno Setup's `regserver` flag.
+
+7. SINGLE-INSTANCE IPC & HARDWARE MOUSE NAVIGATION:
+   - Local IPC Socket Server on port 49152 routes multi-select files to running instances.
+   - 64-bit Win32 hook supports Thumb Button 1 (Back) and Thumb Button 2 (Forward) navigation.
+
+-------------------------------------------------------------------------------
+CLI FLAGS SUPPORTED BY FUSION_ZIP.PY:
+-------------------------------------------------------------------------------
+- --gui [paths...]                     : Opens main staging queue.
+- --open-vault <path>                 : Direct lightweight password unlock & extraction.
+- --compress [paths...]               : Opens AddToArchiveDialog -> live compression.
+- --compress-to <target_dir> [paths...] : Compresses directly into target_dir.
+- --extract-folder [paths...]         : Extracts archive to folder named after archive.
+- --extract-folder-to <target_dir>... : Extracts archive into target_dir/archive_name.
+- --extract-here [paths...]           : Unzips loose files to source directory.
+- --extract-to <target_dir> [paths...] : Unzips loose files / copies folder into target_dir.
+- --unpack / --unpack-folder [paths...] : 1-level move/unpacking into parent folder.
+- --unpack-to / --unpack-folder-to ... : 1-level move/unpacking directly into target_dir.
+- --unpack-all [paths...]             : Flattens all subfolders, keeping .zip archives intact.
+- --unpack-all-to <target_dir>...     : Flattens subfolders directly into target_dir.
+- --unpack-extract-all [paths...]     : Full deep clean flattening folders & extracting archives.
+- --unpack-extract-all-to <target>... : Full deep clean directly into target_dir.
+- --install-shell                     : Registers registry keys and .fzip file association.
+- --uninstall-shell                   : Removes registry keys and file associations.
+
+-------------------------------------------------------------------------------
+COMPILATION, BUILD & RELEASE WORKFLOW:
+-------------------------------------------------------------------------------
+1. Local Dev Shell Test:
+   `python fusion_zip.py --install-shell`
+
+2. PyInstaller Standalone Executable Build:
+   `python -m PyInstaller --noconfirm --onefile --windowed --icon=icon.ico --name=FusionZip --collect-all customtkinter --collect-all py7zr --collect-all pyzipper --add-data="icon.ico;." --add-data="unpack_icon.ico;." --add-data="vault_icon.ico;." fusion_zip.py`
+
+3. Inno Setup 64-bit Installer Compilation:
+   `& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup_script.iss`
+
+4. Clean Git Push:
+   `Remove-Item -Recurse -Force build, FusionZip.spec`
+   `git add .`
+   `git commit -m "Release Update"`
+   `git push origin main`
+
+5. GitHub Releases:
+   Upload `FusionZip_Setup.exe` directly to https://github.com/Fusionog21/FusionZip/releases.
+
+===============================================================================
