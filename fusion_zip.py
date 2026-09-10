@@ -78,6 +78,12 @@ except ImportError:
 # Local Single-Instance IPC Port
 IPC_PORT = 49152
 
+# Global Session Settings
+CONFIRM_CANCEL_PREFERENCE = {"ask": True}
+
+# High-Performance I/O Buffer (1 MB for fast NVMe/SSD streaming)
+STREAM_BUFFER_SIZE = 1024 * 1024
+
 # =============================================================================
 # WINDOWS 11 FLUENT DARK COLOR PALETTE & DESIGN CONSTANTS
 # =============================================================================
@@ -545,7 +551,7 @@ def check_archive_encrypted(archive_path):
 
 
 # =============================================================================
-# CONFLICT STATE & RESOLUTION DIALOG
+# CONFLICT STATE & RESOLUTION DIALOG (THREAD-SAFE EVENT SYNCHRONIZATION)
 # =============================================================================
 class ConflictState:
     def __init__(self):
@@ -556,30 +562,40 @@ def prompt_file_conflict(existing_path, incoming_info, conflict_state, parent=No
     if conflict_state.apply_to_all and conflict_state.action:
         return conflict_state.action
 
-    standalone = False
-    if not parent:
-        parent = ctk.CTk()
-        parent.withdraw()
-        standalone = True
+    choice_container = [None]
+    done_event = threading.Event()
 
-    result = [None, False]
+    def show_dialog_on_ui():
+        use_parent = parent
+        temp_root = None
+        if not use_parent or not hasattr(use_parent, "winfo_exists") or not use_parent.winfo_exists():
+            temp_root = ctk.CTk()
+            temp_root.withdraw()
+            use_parent = temp_root
 
-    def on_choice(choice, apply_all):
-        result[0] = choice
-        result[1] = apply_all
+        def on_choice(choice, apply_all):
+            choice_container[0] = choice or "skip"
+            if apply_all:
+                conflict_state.apply_to_all = True
+                conflict_state.action = choice_container[0]
+            if temp_root:
+                try: temp_root.destroy()
+                except Exception: pass
+            done_event.set()
 
-    dialog = FileConflictDialog(parent, existing_path, incoming_info, on_choice)
-    dialog.wait_window()
+        dialog = FileConflictDialog(use_parent, existing_path, incoming_info, on_choice)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: on_choice("skip", False))
 
-    if standalone:
-        try: parent.destroy()
-        except Exception: pass
+    if threading.current_thread() is threading.main_thread():
+        show_dialog_on_ui()
+    else:
+        if parent and hasattr(parent, "after"):
+            parent.after(0, show_dialog_on_ui)
+        else:
+            show_dialog_on_ui()
+        done_event.wait()
 
-    choice = result[0] or "skip"
-    if result[1]:
-        conflict_state.apply_to_all = True
-        conflict_state.action = choice
-    return choice
+    return choice_container[0] or "skip"
 
 
 def resolve_collision_path(dest_path, incoming_info, conflict_state, parent=None):
@@ -733,6 +749,72 @@ class FileConflictDialog(ctk.CTkToplevel):
         self.destroy()
         if self.callback:
             self.callback(action, self.apply_to_all)
+
+
+# =============================================================================
+# FLUENT CONFIRM CANCEL DIALOG (WITH NEVER SHOW AGAIN)
+# =============================================================================
+class ConfirmCancelDialog(ctk.CTkToplevel):
+    def __init__(self, parent, on_decision):
+        super().__init__(parent)
+        ctk.set_appearance_mode("Dark")
+        self.on_decision = on_decision
+
+        self.title("Cancel Operation")
+        self.resizable(False, False)
+        self.configure(fg_color=COLOR_BG_DARK)
+        self.transient(parent)
+        self.grab_set()
+
+        apply_app_icon(self)
+        center_window_on_screen(self, 420, 200)
+        apply_windows_dark_titlebar(self)
+
+        card = ctk.CTkFrame(self, fg_color=COLOR_CARD_BG, corner_radius=10, border_width=1, border_color=COLOR_BORDER)
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            card, text="Cancel Current Task?",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_TEXT_PRIMARY
+        ).pack(anchor="w", padx=14, pady=(10, 4))
+
+        ctk.CTkLabel(
+            card, text="Are you sure you want to cancel? Any partial files will be cleanly removed.",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=COLOR_TEXT_MUTED, justify="left", wraplength=360
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+
+        self.never_ask_var = ctk.BooleanVar(value=False)
+        chk_never = ctk.CTkCheckBox(
+            card, text="Do not ask me again this session", variable=self.never_ask_var,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=COLOR_TEXT_MUTED,
+            fg_color=COLOR_BLUE_ACCENT, hover_color=COLOR_BLUE_HOVER, corner_radius=4, height=18
+        )
+        chk_never.pack(anchor="w", padx=14, pady=(0, 12))
+
+        btn_box = ctk.CTkFrame(card, fg_color="transparent")
+        btn_box.pack(fill="x", padx=14, pady=(0, 6))
+
+        btn_no = ctk.CTkButton(
+            btn_box, text="No, Resume", fg_color=COLOR_FIELD_BG, hover_color=COLOR_ROW_HOVER,
+            border_width=1, border_color=COLOR_BORDER,
+            text_color="#FFFFFF", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            width=100, height=30, corner_radius=6, command=lambda: self._choose(False)
+        )
+        btn_no.pack(side="right", padx=(6, 0))
+
+        btn_yes = ctk.CTkButton(
+            btn_box, text="Yes, Cancel", fg_color="#c42b1c", hover_color="#d83b01",
+            text_color="#FFFFFF", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            width=100, height=30, corner_radius=6, command=lambda: self._choose(True)
+        )
+        btn_yes.pack(side="right")
+
+    def _choose(self, confirmed):
+        if self.never_ask_var.get():
+            CONFIRM_CANCEL_PREFERENCE["ask"] = False
+        self.destroy()
+        if self.on_decision:
+            self.on_decision(confirmed)
 
 
 # =============================================================================
@@ -1072,18 +1154,20 @@ class AddToArchiveDialog(ctk.CTkToplevel):
 
 
 # =============================================================================
-# UNIVERSAL LIVE FLUENT PROGRESS POPUP (EVENT PUMP & AUTO-CLOSE)
+# UNIVERSAL LIVE FLUENT PROGRESS POPUP (WITH INSTANT CANCEL PROTOCOL)
 # =============================================================================
 class UniversalLiveProgressDialog(ctk.CTkToplevel):
-    def __init__(self, parent, title, task_fn, on_done=None):
+    def __init__(self, parent, title, task_fn, on_done=None, on_cancel=None):
         super().__init__(parent)
         ctk.set_appearance_mode("Dark")
 
         self.title(title)
         self.task_fn = task_fn
         self.on_done = on_done
+        self.on_cancel = on_cancel
         self.is_cancelled = False
         self.last_update_t = 0
+        self.worker_thread = None
 
         self.resizable(False, False)
         self.configure(fg_color=COLOR_BG_DARK)
@@ -1093,6 +1177,9 @@ class UniversalLiveProgressDialog(ctk.CTkToplevel):
         apply_app_icon(self)
         center_window_on_screen(self, 460, 190)
         apply_windows_dark_titlebar(self)
+
+        # Hook Window Close "X" Button
+        self.protocol("WM_DELETE_WINDOW", self.request_cancel)
 
         card = ctk.CTkFrame(self, fg_color=COLOR_CARD_BG, corner_radius=10, border_width=1, border_color=COLOR_BORDER)
         card.pack(fill="both", expand=True, padx=15, pady=15)
@@ -1121,16 +1208,49 @@ class UniversalLiveProgressDialog(ctk.CTkToplevel):
         )
         self.lbl_stats.pack(fill="x", padx=15, pady=(0, 10))
 
-        threading.Thread(target=self._worker_wrapper, daemon=True).start()
+        self.worker_thread = threading.Thread(target=self._worker_wrapper, daemon=True)
+        self.worker_thread.start()
+
+    def request_cancel(self):
+        if self.is_cancelled:
+            return
+
+        if CONFIRM_CANCEL_PREFERENCE.get("ask", True):
+            ConfirmCancelDialog(self, self._on_cancel_confirmed)
+        else:
+            self._do_cancel_action()
+
+    def _on_cancel_confirmed(self, confirmed):
+        if confirmed:
+            self._do_cancel_action()
+
+    def _do_cancel_action(self):
+        self.is_cancelled = True
+        self.lbl_file.configure(text="Cancelling operation... Please wait.")
+        self.lbl_stats.configure(text="Cleaning up incomplete files...")
+        self.progress_bar.configure(progress_color="#c42b1c")
+
+        if self.on_cancel:
+            try: self.on_cancel()
+            except Exception: pass
+
+        self.after(300, self._force_close)
+
+    def _force_close(self):
+        try:
+            if self.winfo_exists():
+                self.destroy()
+        except Exception:
+            pass
 
     def update_status(self, current_b, total_b, start_t, item_name):
         try:
-            if not self.winfo_exists(): return
+            if not self.winfo_exists() or self.is_cancelled: return
         except Exception:
             return
 
         now = time.time()
-        if (now - self.last_update_t) < 0.035 and current_b < total_b:
+        if (now - self.last_update_t) < 0.04 and current_b < total_b:
             return
         self.last_update_t = now
 
@@ -1149,7 +1269,7 @@ class UniversalLiveProgressDialog(ctk.CTkToplevel):
 
         def _do_update():
             try:
-                if self.winfo_exists():
+                if self.winfo_exists() and not self.is_cancelled:
                     self.progress_bar.set(pct)
                     self.lbl_file.configure(text=f"Processing: {item_name[:32]} ({int(pct*100)}%)")
                     self.lbl_stats.configure(
@@ -1169,10 +1289,11 @@ class UniversalLiveProgressDialog(ctk.CTkToplevel):
         except Exception as e:
             print(f"Task error: {e}")
         finally:
-            try:
-                self.after(0, self._cleanup_and_close)
-            except Exception:
-                pass
+            if not self.is_cancelled:
+                try:
+                    self.after(0, self._cleanup_and_close)
+                except Exception:
+                    pass
 
     def _cleanup_and_close(self):
         try:
@@ -1228,13 +1349,22 @@ class FusionZipApp(ctk.CTk):
         inner_command = ctk.CTkFrame(top_command_card, fg_color="transparent")
         inner_command.pack(fill="x", padx=16, pady=8)
 
-        self.btn_add = ctk.CTkButton(
-            inner_command, text="➕ Add Items", fg_color=COLOR_BLUE_ACCENT, hover_color=COLOR_BLUE_HOVER,
+        self.btn_add_files = ctk.CTkButton(
+            inner_command, text="➕ Add Files", fg_color=COLOR_BLUE_ACCENT, hover_color=COLOR_BLUE_HOVER,
             text_color="#FFFFFF", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-            corner_radius=6, height=32, width=110, command=self.add_items_dialog
+            corner_radius=6, height=32, width=105, command=self.add_files_dialog
         )
-        self.btn_add.pack(side="left", padx=(0, 12))
-        FloatingTooltip(self.btn_add, "Browse files or folders into your staging queue.")
+        self.btn_add_files.pack(side="left", padx=(0, 6))
+        FloatingTooltip(self.btn_add_files, "Browse individual files to add to your queue.")
+
+        self.btn_add_folder = ctk.CTkButton(
+            inner_command, text="📁 Add Folder", fg_color=COLOR_FIELD_BG, hover_color=COLOR_ROW_HOVER,
+            border_width=1, border_color=COLOR_BORDER,
+            text_color="#FFFFFF", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            corner_radius=6, height=32, width=110, command=self.add_folder_dialog
+        )
+        self.btn_add_folder.pack(side="left", padx=(0, 12))
+        FloatingTooltip(self.btn_add_folder, "Select an entire folder to add to your queue.")
 
         self.address_bar = ctk.CTkFrame(
             inner_command, fg_color=COLOR_FIELD_BG, corner_radius=6, height=32,
@@ -1261,20 +1391,36 @@ class FusionZipApp(ctk.CTk):
         )
         self.hdr_frame.pack(fill="x", padx=8, pady=(8, 4))
 
-        hdr_name = ctk.CTkLabel(self.hdr_frame, text="Name", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, anchor="w")
+        # Pinned right-to-left so columns NEVER get pushed off
+        self.hdr_del = ctk.CTkLabel(
+            self.hdr_frame, text="Remove", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            text_color=COLOR_TEXT_MUTED, width=50, anchor="center"
+        )
+        self.hdr_del.pack(side="right", padx=(10, 15))
+
+        hdr_date = ctk.CTkLabel(
+            self.hdr_frame, text="Date Modified", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            text_color=COLOR_TEXT_MUTED, width=135, anchor="center"
+        )
+        hdr_date.pack(side="right", padx=10)
+
+        hdr_type = ctk.CTkLabel(
+            self.hdr_frame, text="Type", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            text_color=COLOR_TEXT_MUTED, width=105, anchor="center"
+        )
+        hdr_type.pack(side="right", padx=10)
+
+        hdr_size = ctk.CTkLabel(
+            self.hdr_frame, text="Size", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            text_color=COLOR_TEXT_MUTED, width=95, anchor="e"
+        )
+        hdr_size.pack(side="right", padx=10)
+
+        hdr_name = ctk.CTkLabel(
+            self.hdr_frame, text="Name", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            text_color=COLOR_TEXT_MUTED, anchor="w"
+        )
         hdr_name.pack(side="left", padx=15, expand=True, fill="x")
-
-        hdr_size = ctk.CTkLabel(self.hdr_frame, text="Size", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, width=95, anchor="e")
-        hdr_size.pack(side="left", padx=10)
-
-        hdr_type = ctk.CTkLabel(self.hdr_frame, text="Type", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, width=105, anchor="center")
-        hdr_type.pack(side="left", padx=10)
-
-        hdr_date = ctk.CTkLabel(self.hdr_frame, text="Date Modified", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, width=135, anchor="center")
-        hdr_date.pack(side="left", padx=10)
-
-        hdr_del = ctk.CTkLabel(self.hdr_frame, text="Remove", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=COLOR_TEXT_MUTED, width=50, anchor="center")
-        hdr_del.pack(side="left", padx=(10, 15))
 
         self.scroll_frame = ctk.CTkScrollableFrame(
             self.grid_card, fg_color="transparent", corner_radius=0,
@@ -1417,12 +1563,20 @@ class FusionZipApp(ctk.CTk):
         except Exception as e:
             print(f"Nav error: {e}")
 
-    def add_items_dialog(self):
+    def add_files_dialog(self):
         files = filedialog.askopenfilenames(title="Select Files to Add")
         if files:
             for f in files:
                 if not any(x["path"] == f for x in self.queue_items):
                     self.queue_items.append({"path": f})
+            self._update_default_archive_name()
+            self._refresh_grid()
+
+    def add_folder_dialog(self):
+        folder = filedialog.askdirectory(title="Select Folder to Add")
+        if folder:
+            if not any(x["path"] == folder for x in self.queue_items):
+                self.queue_items.append({"path": folder})
             self._update_default_archive_name()
             self._refresh_grid()
 
@@ -1447,7 +1601,6 @@ class FusionZipApp(ctk.CTk):
 
     def remove_item(self, target_path):
         if self.current_folder_view:
-            messagebox.showinfo("Queue Notice", "Items inside subfolders are part of the active folder structure.")
             return
         self.queue_items = [x for x in self.queue_items if x["path"] != target_path]
         if not self.queue_items:
@@ -1499,6 +1652,7 @@ class FusionZipApp(ctk.CTk):
 
         if self.current_folder_view:
             self.lbl_location.configure(text=f"📁 {self.current_folder_view}")
+            self.hdr_del.configure(text="")
             up_row = ctk.CTkFrame(
                 self.scroll_frame, fg_color=COLOR_FIELD_BG, corner_radius=6,
                 border_width=1, border_color=COLOR_BORDER
@@ -1550,6 +1704,7 @@ class FusionZipApp(ctk.CTk):
             return
 
         self.lbl_location.configure(text="📁 Staging Queue")
+        self.hdr_del.configure(text="Remove")
         count = len(self.queue_items)
 
         if count == 0:
@@ -1565,7 +1720,7 @@ class FusionZipApp(ctk.CTk):
                 font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_TEXT_PRIMARY
             ).pack(pady=(0, 2))
             ctk.CTkLabel(
-                empty_card, text="or click '+ Add Items' above to stage files for compression & extraction",
+                empty_card, text="or click '+ Add Files' or 'Add Folder' above to stage files for compression & extraction",
                 font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=COLOR_TEXT_MUTED
             ).pack(pady=(0, 28))
 
@@ -1620,6 +1775,47 @@ class FusionZipApp(ctk.CTk):
 
         mtime = datetime.datetime.fromtimestamp(os.path.getmtime(path)).strftime("%m/%d/%Y %I:%M %p") if os.path.exists(path) else "-"
 
+        # 1. Delete button (or blank spacer) pinned to far right
+        if not is_inside:
+            del_btn = ctk.CTkButton(
+                row, text="✖", fg_color="transparent", hover_color=COLOR_ROW_HOVER,
+                text_color=COLOR_TEXT_ALERT, width=26, height=26, font=ctk.CTkFont(size=11, weight="bold"),
+                command=lambda p=path: self.remove_item(p)
+            )
+            del_btn.pack(side="right", padx=(5, 12))
+            FloatingTooltip(del_btn, "Remove from queue.")
+        else:
+            ctk.CTkLabel(row, text="", width=26).pack(side="right", padx=(5, 12))
+
+        # 2. Date Modified pinned to right
+        date_lbl = ctk.CTkLabel(
+            row, text=mtime, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=COLOR_TEXT_MUTED, width=135, anchor="center"
+        )
+        date_lbl.pack(side="right", padx=10)
+
+        # 3. Type Badge pinned to right
+        badge_fg = "#1e3a5f" if is_arch else ("#3b2d18" if is_dir else COLOR_BADGE_BG)
+        badge_txt_c = COLOR_ACCENT_TEXT if is_arch else ("#fcd34d" if is_dir else COLOR_TEXT_MUTED)
+
+        type_badge = ctk.CTkFrame(row, fg_color=badge_fg, corner_radius=4, width=105, height=22)
+        type_badge.pack(side="right", padx=10)
+        type_badge.pack_propagate(False)
+
+        type_lbl = ctk.CTkLabel(
+            type_badge, text=ftype, font=ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold"),
+            text_color=badge_txt_c, anchor="center"
+        )
+        type_lbl.pack(fill="both", expand=True)
+
+        # 4. Size pinned to right
+        size_lbl = ctk.CTkLabel(
+            row, text=size_str, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=COLOR_TEXT_MUTED, width=95, anchor="e"
+        )
+        size_lbl.pack(side="right", padx=10)
+
+        # 5. Name Box fills remaining space on left
         name_box = ctk.CTkFrame(row, fg_color="transparent")
         name_box.pack(side="left", padx=(10, 5), pady=5, expand=True, fill="x")
 
@@ -1638,39 +1834,7 @@ class FusionZipApp(ctk.CTk):
         )
         name_lbl.pack(side="left", fill="x", expand=True)
 
-        size_lbl = ctk.CTkLabel(
-            row, text=size_str, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
-            text_color=COLOR_TEXT_MUTED, width=95, anchor="e"
-        )
-        size_lbl.pack(side="left", padx=10)
-
-        badge_fg = "#1e3a5f" if is_arch else ("#3b2d18" if is_dir else COLOR_BADGE_BG)
-        badge_txt_c = COLOR_ACCENT_TEXT if is_arch else ("#fcd34d" if is_dir else COLOR_TEXT_MUTED)
-
-        type_badge = ctk.CTkFrame(row, fg_color=badge_fg, corner_radius=4, width=105, height=22)
-        type_badge.pack(side="left", padx=10)
-        type_badge.pack_propagate(False)
-
-        type_lbl = ctk.CTkLabel(
-            type_badge, text=ftype, font=ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold"),
-            text_color=badge_txt_c, anchor="center"
-        )
-        type_lbl.pack(fill="both", expand=True)
-
-        date_lbl = ctk.CTkLabel(
-            row, text=mtime, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
-            text_color=COLOR_TEXT_MUTED, width=135, anchor="center"
-        )
-        date_lbl.pack(side="left", padx=10)
-
-        del_btn = ctk.CTkButton(
-            row, text="✖", fg_color="transparent", hover_color=COLOR_ROW_HOVER,
-            text_color=COLOR_TEXT_ALERT, width=26, height=26, font=ctk.CTkFont(size=11, weight="bold"),
-            command=lambda p=path: self.remove_item(p)
-        )
-        del_btn.pack(side="left", padx=(5, 12))
-        FloatingTooltip(del_btn, "Remove from queue.")
-
+        # Hover & Double-Click bindings
         def on_enter(e): row.configure(fg_color=COLOR_ROW_HOVER)
         def on_leave(e): row.configure(fg_color=COLOR_FIELD_BG)
         row.bind("<Enter>", on_enter)
@@ -1695,6 +1859,30 @@ class FusionZipApp(ctk.CTk):
         native_icon = get_native_windows_icon(filename, size=20)
         size_str = f"{round(size_b/1024, 1)} KB" if size_b else "-"
 
+        # Right-side pinned columns
+        date_lbl = ctk.CTkLabel(
+            row, text="-", font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=COLOR_TEXT_MUTED, width=135, anchor="center"
+        )
+        date_lbl.pack(side="right", padx=10)
+
+        type_badge = ctk.CTkFrame(row, fg_color=COLOR_BADGE_BG, corner_radius=4, width=105, height=22)
+        type_badge.pack(side="right", padx=10)
+        type_badge.pack_propagate(False)
+
+        type_lbl = ctk.CTkLabel(
+            type_badge, text="Compressed", font=ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold"),
+            text_color=COLOR_TEXT_MUTED, anchor="center"
+        )
+        type_lbl.pack(fill="both", expand=True)
+
+        size_lbl = ctk.CTkLabel(
+            row, text=size_str, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=COLOR_TEXT_MUTED, width=95, anchor="e"
+        )
+        size_lbl.pack(side="right", padx=10)
+
+        # Name fills remaining space on left
         name_box = ctk.CTkFrame(row, fg_color="transparent")
         name_box.pack(side="left", padx=(10, 5), pady=5, expand=True, fill="x")
 
@@ -1710,28 +1898,6 @@ class FusionZipApp(ctk.CTk):
         )
         name_lbl.pack(side="left", fill="x", expand=True)
 
-        size_lbl = ctk.CTkLabel(
-            row, text=size_str, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
-            text_color=COLOR_TEXT_MUTED, width=95, anchor="e"
-        )
-        size_lbl.pack(side="left", padx=10)
-
-        type_badge = ctk.CTkFrame(row, fg_color=COLOR_BADGE_BG, corner_radius=4, width=105, height=22)
-        type_badge.pack(side="left", padx=10)
-        type_badge.pack_propagate(False)
-
-        type_lbl = ctk.CTkLabel(
-            type_badge, text="Compressed", font=ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold"),
-            text_color=COLOR_TEXT_MUTED, anchor="center"
-        )
-        type_lbl.pack(fill="both", expand=True)
-
-        date_lbl = ctk.CTkLabel(
-            row, text="-", font=ctk.CTkFont(family=FONT_FAMILY, size=11),
-            text_color=COLOR_TEXT_MUTED, width=135, anchor="center"
-        )
-        date_lbl.pack(side="left", padx=10)
-
     # -------------------------------------------------------------------------
     # DUAL-MODE COMPRESSION WORKER
     # -------------------------------------------------------------------------
@@ -1744,6 +1910,9 @@ class FusionZipApp(ctk.CTk):
             default_name = f"{os.path.basename(self.current_folder_view)}.zip"
         elif len(self.queue_items) > 0:
             targets = [x["path"] for x in self.queue_items if os.path.exists(x["path"])]
+            if not targets:
+                messagebox.showwarning("Notice", "None of the queued items exist on disk anymore.")
+                return
             first_item = targets[0]
             stem = os.path.basename(first_item) if os.path.isdir(first_item) else os.path.splitext(os.path.basename(first_item))[0]
             default_name = f"{stem}.zip"
@@ -1787,7 +1956,7 @@ class FusionZipApp(ctk.CTk):
         run_live_compress(targets, os.path.basename(out_archive), self.last_output_dir, password, parent=self, on_done=_on_done)
 
     # -------------------------------------------------------------------------
-    # UNIVERSAL EXTRACTION WORKER
+    # UNIVERSAL MULTI-ARCHIVE EXTRACTION WORKER
     # -------------------------------------------------------------------------
     def start_extraction_thread(self):
         if self.is_processing:
@@ -1801,39 +1970,54 @@ class FusionZipApp(ctk.CTk):
             messagebox.showinfo("Extraction", "No archive files queued for extraction.")
             return
 
-        target_archive = archives[0]
-
-        if check_archive_encrypted(target_archive):
-            EncryptedArchiveDialog(self, target_archive, self._start_extraction_with_password)
-        else:
-            self._start_extraction_with_password(target_archive, None)
-
-    def _start_extraction_with_password(self, target_archive, password):
-        target_dir = filedialog.askdirectory(title="Select Extraction Directory")
+        target_dir = filedialog.askdirectory(title="Select Extraction Destination Directory")
         if not target_dir:
             return
 
         self.last_output_dir = target_dir
 
-        def _on_done():
-            try:
-                if self.winfo_exists():
-                    self.lbl_status.configure(text="Extraction complete!")
-                    self.btn_open_folder.pack(side="right", padx=10)
-            except Exception:
-                pass
+        def extract_sequence(index=0):
+            if index >= len(archives):
+                try:
+                    if self.winfo_exists():
+                        self.lbl_status.configure(text=f"Ready | Extracted {len(archives)} archive(s)!")
+                        self.btn_open_folder.pack(side="right", padx=10)
+                except Exception:
+                    pass
+                return
 
-        run_live_extract_folder(target_archive, target_dir, password, parent=self, on_done=_on_done)
+            arch = archives[index]
+            dest = os.path.join(target_dir, os.path.splitext(os.path.basename(arch))[0]) if len(archives) > 1 else target_dir
+
+            def on_arch_done():
+                self.after(50, lambda: extract_sequence(index + 1))
+
+            if check_archive_encrypted(arch):
+                EncryptedArchiveDialog(self, arch, lambda p, pwd: run_live_extract_folder(p, dest, pwd, parent=self, on_done=on_arch_done))
+            else:
+                run_live_extract_folder(arch, dest, None, parent=self, on_done=on_arch_done)
+
+        extract_sequence(0)
 
 
 # =============================================================================
-# LIVE WORKERS (ASYNC PROGRESS STREAMING)
+# OPTIMIZED HIGH-PERFORMANCE LIVE WORKERS (STREAMING I/O + INSTANT CANCEL)
 # =============================================================================
 def run_live_compress(targets, archive_name, target_dir, password=None, parent=None, on_done=None):
-    """Executes compression without freezing the GUI event loop."""
+    """Blazing-fast compression with high-throughput streaming and clean instant cancellation."""
+    out_abs = os.path.join(target_dir, archive_name)
+
+    def cancel_cleanup():
+        # Clean up incomplete file if cancelled
+        try:
+            time.sleep(0.1)
+            if os.path.exists(out_abs):
+                os.remove(out_abs)
+        except Exception:
+            pass
+
     def task(update_fn, is_cancelled_fn):
         os.makedirs(target_dir, exist_ok=True)
-        out_abs = os.path.join(target_dir, archive_name)
         ext = os.path.splitext(archive_name)[1].lower()
 
         total_bytes = 0
@@ -1847,104 +2031,148 @@ def run_live_compress(targets, archive_name, target_dir, password=None, parent=N
                         total_bytes += os.path.getsize(os.path.join(root, f))
 
         total_bytes = max(1, total_bytes)
-        processed_bytes = 0
         start_time = time.time()
         is_single_folder = (len(valid_files) == 1 and os.path.isdir(valid_files[0]))
 
-        # Vault / 7z Mode
+        # High-Speed 7z / Vault Mode with Live Smooth Progress Streaming
         if (ext in [".fzip", ".fz", ".7z"] or (password and not ext == ".zip")) and HAS_PY7ZR:
-            with py7zr.SevenZipFile(out_abs, 'w', password=password or None, header_encryption=bool(password)) as szf:
-                for target in valid_files:
+            filters = [{'id': py7zr.FILTER_LZMA2, 'preset': 1}]
+            
+            stop_progress_monitor = threading.Event()
+            def monitor_output_growth():
+                while not stop_progress_monitor.is_set():
                     if is_cancelled_fn(): break
-                    target_abs = os.path.abspath(target)
-                    if target_abs == out_abs: continue
+                    try:
+                        if os.path.exists(out_abs):
+                            cur_size = os.path.getsize(out_abs)
+                            est_input_read = min(cur_size * 1.05, total_bytes * 0.96)
+                            update_fn(max(1024, est_input_read), total_bytes, start_time, os.path.basename(archive_name))
+                    except Exception:
+                        pass
+                    time.sleep(0.08)
 
-                    if os.path.isfile(target_abs):
-                        file_size = os.path.getsize(target_abs)
-                        processed_bytes += file_size
-                        update_fn(processed_bytes, total_bytes, start_time, os.path.basename(target_abs))
-                        szf.write(target_abs, os.path.basename(target_abs))
+            prog_thread = threading.Thread(target=monitor_output_growth, daemon=True)
+            prog_thread.start()
 
-                    elif os.path.isdir(target_abs):
-                        base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
-                        has_items = False
-                        for root, dirs, files in os.walk(target_abs):
-                            if is_cancelled_fn(): break
-                            for d in dirs:
-                                dir_path = os.path.join(root, d)
-                                rel_dir = os.path.relpath(dir_path, base_root)
-                                if rel_dir != ".":
-                                    szf.write(dir_path, rel_dir)
-                                    has_items = True
-                            for file in files:
-                                full_p = os.path.abspath(os.path.join(root, file))
-                                if full_p == out_abs: continue
-                                processed_bytes += os.path.getsize(full_p)
-                                rel_p = os.path.relpath(full_p, base_root)
-                                update_fn(processed_bytes, total_bytes, start_time, file)
-                                szf.write(full_p, rel_p)
-                                has_items = True
-                        if not has_items:
-                            szf.write(target_abs, "" if is_single_folder else os.path.basename(target_abs))
-
-        # ZIP Mode
-        else:
-            if password:
-                if HAS_PYZIPPER:
-                    zf = pyzipper.AESZipFile(out_abs, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES)
-                    zf.setpassword(password.encode('utf-8'))
-                    zf.setencryption(pyzipper.WZ_AES, nbits=256)
-                elif HAS_PY7ZR:
-                    with py7zr.SevenZipFile(out_abs, 'w', password=password, header_encryption=True) as szf:
-                        for target in valid_files:
-                            target_abs = os.path.abspath(target)
-                            if os.path.isfile(target_abs):
-                                szf.write(target_abs, os.path.basename(target_abs))
-                            elif os.path.isdir(target_abs):
-                                base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
-                                for root, dirs, files in os.walk(target_abs):
-                                    for file in files:
-                                        full_p = os.path.join(root, file)
-                                        szf.write(full_p, os.path.relpath(full_p, base_root))
-                    return
-                else:
-                    raise Exception("pyzipper or py7zr required for password encryption.")
-            else:
-                zf = zipfile.ZipFile(out_abs, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1)
-
-            for target in valid_files:
-                if is_cancelled_fn(): break
-                target_abs = os.path.abspath(target)
-                if target_abs == out_abs: continue
-
-                if os.path.isfile(target_abs):
-                    file_size = os.path.getsize(target_abs)
-                    processed_bytes += file_size
-                    update_fn(processed_bytes, total_bytes, start_time, os.path.basename(target_abs))
-                    zf.write(target_abs, os.path.basename(target_abs))
-
-                elif os.path.isdir(target_abs):
-                    base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
-                    has_items = False
-                    for root, dirs, files in os.walk(target_abs):
+            try:
+                with py7zr.SevenZipFile(out_abs, 'w', password=password or None, header_encryption=bool(password), filters=filters) as szf:
+                    for target in valid_files:
                         if is_cancelled_fn(): break
-                        for d in dirs:
-                            dir_path = os.path.join(root, d)
-                            rel_dir = os.path.relpath(dir_path, base_root)
-                            if rel_dir != ".":
-                                zf.write(dir_path, rel_dir + "/")
-                                has_items = True
-                        for file in files:
-                            full_p = os.path.abspath(os.path.join(root, file))
-                            if full_p == out_abs: continue
-                            processed_bytes += os.path.getsize(full_p)
-                            rel_p = os.path.relpath(full_p, base_root)
-                            update_fn(processed_bytes, total_bytes, start_time, file)
-                            zf.write(full_p, rel_p)
-                            has_items = True
-                    if not has_items and not is_single_folder:
-                        zf.write(target_abs, os.path.basename(target_abs) + "/")
-            zf.close()
+                        target_abs = os.path.abspath(target)
+                        if target_abs == out_abs: continue
+
+                        if os.path.isfile(target_abs):
+                            szf.write(target_abs, os.path.basename(target_abs))
+
+                        elif os.path.isdir(target_abs):
+                            base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
+                            has_items = False
+                            for root, dirs, files in os.walk(target_abs):
+                                if is_cancelled_fn(): break
+                                for d in dirs:
+                                    dir_path = os.path.join(root, d)
+                                    rel_dir = os.path.relpath(dir_path, base_root)
+                                    if rel_dir != ".":
+                                        szf.write(dir_path, rel_dir)
+                                        has_items = True
+                                for file in files:
+                                    if is_cancelled_fn(): break
+                                    full_p = os.path.abspath(os.path.join(root, file))
+                                    if full_p == out_abs: continue
+                                    rel_p = os.path.relpath(full_p, base_root)
+                                    szf.write(full_p, rel_p)
+                                    has_items = True
+                            if not has_items:
+                                szf.write(target_abs, "" if is_single_folder else os.path.basename(target_abs))
+            finally:
+                stop_progress_monitor.set()
+
+            if not is_cancelled_fn():
+                update_fn(total_bytes, total_bytes, start_time, os.path.basename(archive_name))
+
+        # Fast Deflate ZIP Mode with Live Output Streaming
+        else:
+            stop_zip_monitor = threading.Event()
+            def monitor_zip_growth():
+                while not stop_zip_monitor.is_set():
+                    if is_cancelled_fn(): break
+                    try:
+                        if os.path.exists(out_abs):
+                            cur_size = os.path.getsize(out_abs)
+                            est_input = min(cur_size * 1.05, total_bytes * 0.96)
+                            update_fn(max(1024, est_input), total_bytes, start_time, os.path.basename(archive_name))
+                    except Exception:
+                        pass
+                    time.sleep(0.08)
+
+            zip_prog_thread = threading.Thread(target=monitor_zip_growth, daemon=True)
+            zip_prog_thread.start()
+
+            try:
+                if password:
+                    if HAS_PYZIPPER:
+                        zf = pyzipper.AESZipFile(out_abs, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES)
+                        zf.setpassword(password.encode('utf-8'))
+                        zf.setencryption(pyzipper.WZ_AES, nbits=256)
+                    elif HAS_PY7ZR:
+                        filters = [{'id': py7zr.FILTER_LZMA2, 'preset': 1}]
+                        with py7zr.SevenZipFile(out_abs, 'w', password=password, header_encryption=True, filters=filters) as szf:
+                            for target in valid_files:
+                                if is_cancelled_fn(): break
+                                target_abs = os.path.abspath(target)
+                                if os.path.isfile(target_abs):
+                                    szf.write(target_abs, os.path.basename(target_abs))
+                                elif os.path.isdir(target_abs):
+                                    base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
+                                    for root, dirs, files in os.walk(target_abs):
+                                        for file in files:
+                                            full_p = os.path.join(root, file)
+                                            szf.write(full_p, os.path.relpath(full_p, base_root))
+                        return
+                    else:
+                        raise Exception("pyzipper or py7zr required for password encryption.")
+                else:
+                    zf = zipfile.ZipFile(out_abs, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1)
+
+                try:
+                    for target in valid_files:
+                        if is_cancelled_fn(): break
+                        target_abs = os.path.abspath(target)
+                        if target_abs == out_abs: continue
+
+                        if os.path.isfile(target_abs):
+                            zf.write(target_abs, os.path.basename(target_abs))
+
+                        elif os.path.isdir(target_abs):
+                            base_root = target_abs if is_single_folder else os.path.dirname(target_abs)
+                            has_items = False
+                            for root, dirs, files in os.walk(target_abs):
+                                if is_cancelled_fn(): break
+                                for d in dirs:
+                                    dir_path = os.path.join(root, d)
+                                    rel_dir = os.path.relpath(dir_path, base_root)
+                                    if rel_dir != ".":
+                                        zf.write(dir_path, rel_dir + "/")
+                                        has_items = True
+                                for file in files:
+                                    if is_cancelled_fn(): break
+                                    full_p = os.path.abspath(os.path.join(root, file))
+                                    if full_p == out_abs: continue
+                                    rel_p = os.path.relpath(full_p, base_root)
+                                    zf.write(full_p, rel_p)
+                                    has_items = True
+                            if not has_items and not is_single_folder:
+                                zf.write(target_abs, os.path.basename(target_abs) + "/")
+                finally:
+                    zf.close()
+            finally:
+                stop_zip_monitor.set()
+
+            if not is_cancelled_fn():
+                update_fn(total_bytes, total_bytes, start_time, os.path.basename(archive_name))
+
+        if is_cancelled_fn():
+            cancel_cleanup()
 
     standalone = False
     if not parent:
@@ -1960,7 +2188,10 @@ def run_live_compress(targets, archive_name, target_dir, password=None, parent=N
             try: parent.destroy()
             except Exception: pass
 
-    dlg = UniversalLiveProgressDialog(parent, f"Packaging '{archive_name[:30]}'...", task, on_done=_cleanup)
+    dlg = UniversalLiveProgressDialog(
+        parent, f"Packaging '{archive_name[:30]}'...", task,
+        on_done=_cleanup, on_cancel=cancel_cleanup
+    )
     if standalone:
         parent.mainloop()
 
@@ -1970,51 +2201,58 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
 
     conflict_state = ConflictState()
     os.makedirs(destination_dir, exist_ok=True)
+    created_paths = []
+
+    def cancel_cleanup():
+        time.sleep(0.1)
+        for p in reversed(created_paths):
+            try:
+                if os.path.isfile(p): os.remove(p)
+                elif os.path.isdir(p) and not os.listdir(p): os.rmdir(p)
+            except Exception: pass
 
     def task(update_fn, is_cancelled_fn):
         ext = os.path.splitext(archive_path)[1].lower()
         start_time = time.time()
-        CHUNK_SIZE = 8 * 1024 * 1024
         dest_abs = os.path.abspath(destination_dir)
 
-        if os.path.isdir(archive_path):
-            folder_name = os.path.basename(os.path.abspath(archive_path))
-            dest_folder = os.path.join(destination_dir, folder_name)
-            final_folder, status = resolve_collision_path(dest_folder, {"size": 0, "is_folder": True, "time": "Folder"}, conflict_state, parent)
-            if status == "write":
-                total_bytes = sum(os.path.getsize(os.path.join(r, f)) for r, d, files in os.walk(archive_path) for f in files) or 1
-                processed = 0
-                for root, dirs, files in os.walk(archive_path):
-                    if is_cancelled_fn(): break
-                    for d in dirs:
-                        os.makedirs(os.path.join(final_folder, os.path.relpath(os.path.join(root, d), archive_path)), exist_ok=True)
-                    for f in files:
-                        src_f = os.path.join(root, f)
-                        rel_f = os.path.relpath(src_f, archive_path)
-                        dst_f = os.path.join(final_folder, rel_f)
-                        os.makedirs(os.path.dirname(dst_f), exist_ok=True)
-                        with open(src_f, 'rb') as sf, open(dst_f, 'wb') as df:
-                            while True:
-                                if is_cancelled_fn(): break
-                                chunk = sf.read(CHUNK_SIZE)
-                                if not chunk: break
-                                df.write(chunk)
-                                processed += len(chunk)
-                                update_fn(processed, total_bytes, start_time, f)
-            return
-
-        # 7z / .fzip Extraction
+        # 7z / .fzip Extraction with Live Progress Streaming
         if (ext in [".7z", ".fz", ".fzip"] or (HAS_PY7ZR and py7zr.is_7zfile(archive_path))) and HAS_PY7ZR:
             with py7zr.SevenZipFile(archive_path, 'r', password=password or None) as szf:
                 infos = szf.list()
                 total_bytes = sum(i.uncompressed for i in infos if not i.is_directory) or 1
-                szf.extractall(path=destination_dir)
-                update_fn(total_bytes, total_bytes, start_time, os.path.basename(archive_path))
+                
+                stop_extract_monitor = threading.Event()
+                def monitor_extract_growth():
+                    while not stop_extract_monitor.is_set():
+                        if is_cancelled_fn(): break
+                        try:
+                            cur_extracted = 0
+                            for root, dirs, files in os.walk(destination_dir):
+                                for f in files:
+                                    cur_extracted += os.path.getsize(os.path.join(root, f))
+                            est_val = min(cur_extracted, total_bytes * 0.98)
+                            update_fn(max(1024, est_val), total_bytes, start_time, os.path.basename(archive_path))
+                        except Exception:
+                            pass
+                        time.sleep(0.08)
+
+                ext_thread = threading.Thread(target=monitor_extract_growth, daemon=True)
+                ext_thread.start()
+
+                try:
+                    szf.extractall(path=destination_dir)
+                finally:
+                    stop_extract_monitor.set()
+
+                if not is_cancelled_fn():
+                    update_fn(total_bytes, total_bytes, start_time, os.path.basename(archive_path))
 
         # RAR Extraction
         elif ext == ".rar" and HAS_RARFILE:
             with rarfile.RarFile(archive_path, 'r') as rf:
-                if password: rf.setpassword(pwd)
+                if password:
+                    rf.setpassword(password)
                 infos = rf.infolist()
                 total_bytes = sum(i.file_size for i in infos if not i.isdir()) or 1
                 processed = 0
@@ -2022,24 +2260,29 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
                     if is_cancelled_fn(): break
                     clean_name = info.filename.replace('\\', '/')
                     out_path = os.path.join(destination_dir, clean_name)
+                    target_full = os.path.abspath(out_path)
 
-                    # Zip Slip Guard
-                    if not os.path.abspath(out_path).startswith(dest_abs):
+                    # Zip-Slip Guard
+                    try:
+                        if os.path.commonpath([dest_abs, target_full]) != dest_abs:
+                            continue
+                    except Exception:
                         continue
 
-                    # Create empty directories
                     if info.isdir() or clean_name.endswith('/'):
                         os.makedirs(out_path, exist_ok=True)
                         continue
 
-                    in_info = {"size": info.file_size, "time": str(info.date_time)}
+                    time_str = datetime.datetime(*info.date_time).strftime("%b %d, %Y - %I:%M %p") if len(info.date_time) >= 6 else "Archive Item"
+                    in_info = {"size": info.file_size, "time": time_str}
                     final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                     if status == "write":
                         os.makedirs(os.path.dirname(final_path), exist_ok=True)
+                        created_paths.append(final_path)
                         with rf.open(info) as src, open(final_path, 'wb') as dst:
                             while True:
                                 if is_cancelled_fn(): break
-                                chunk = src.read(CHUNK_SIZE)
+                                chunk = src.read(STREAM_BUFFER_SIZE)
                                 if not chunk: break
                                 dst.write(chunk)
                                 processed += len(chunk)
@@ -2057,28 +2300,33 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
                 for member in members:
                     if is_cancelled_fn(): break
                     out_path = os.path.join(destination_dir, member.name)
+                    target_full = os.path.abspath(out_path)
 
-                    # Zip Slip Guard
-                    if not os.path.abspath(out_path).startswith(dest_abs):
+                    # Zip-Slip Guard
+                    try:
+                        if os.path.commonpath([dest_abs, target_full]) != dest_abs:
+                            continue
+                    except Exception:
                         continue
 
-                    # Create empty directories
                     if member.isdir():
                         os.makedirs(out_path, exist_ok=True)
                         continue
 
                     if not member.isfile(): continue
 
-                    in_info = {"size": member.size, "time": str(member.mtime)}
+                    time_str = datetime.datetime.fromtimestamp(member.mtime).strftime("%b %d, %Y - %I:%M %p")
+                    in_info = {"size": member.size, "time": time_str}
                     final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
                     if status == "write":
                         os.makedirs(os.path.dirname(final_path), exist_ok=True)
+                        created_paths.append(final_path)
                         f_src = tf.extractfile(member)
                         if f_src:
                             with open(final_path, 'wb') as dst:
                                 while True:
                                     if is_cancelled_fn(): break
-                                    chunk = f_src.read(CHUNK_SIZE)
+                                    chunk = f_src.read(STREAM_BUFFER_SIZE)
                                     if not chunk: break
                                     dst.write(chunk)
                                     processed += len(chunk)
@@ -2087,7 +2335,7 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
                         processed += member.size
                         update_fn(processed, total_bytes, start_time, os.path.basename(member.name))
 
-        # Standard / AES-256 ZIP Extraction
+        # Standard / AES-256 Fast Streaming ZIP Extraction
         else:
             if HAS_PYZIPPER:
                 zf = pyzipper.AESZipFile(archive_path, 'r')
@@ -2097,39 +2345,49 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
             if password:
                 zf.setpassword(password.encode('utf-8'))
 
-            infos = zf.infolist()
-            total_bytes = sum(i.file_size for i in infos if not i.is_dir()) or 1
-            processed = 0
-            for info in infos:
-                if is_cancelled_fn(): break
-                clean_name = info.filename.replace('\\', '/')
-                out_path = os.path.join(destination_dir, clean_name)
+            try:
+                infos = zf.infolist()
+                total_bytes = sum(i.file_size for i in infos if not i.is_dir()) or 1
+                processed = 0
+                for info in infos:
+                    if is_cancelled_fn(): break
+                    clean_name = info.filename.replace('\\', '/')
+                    out_path = os.path.join(destination_dir, clean_name)
+                    target_full = os.path.abspath(out_path)
 
-                # Zip Slip Guard
-                if not os.path.abspath(out_path).startswith(dest_abs):
-                    continue
+                    # Zip-Slip Guard
+                    try:
+                        if os.path.commonpath([dest_abs, target_full]) != dest_abs:
+                            continue
+                    except Exception:
+                        continue
 
-                # Create empty directories
-                if info.is_dir() or clean_name.endswith('/'):
-                    os.makedirs(out_path, exist_ok=True)
-                    continue
+                    if info.is_dir() or clean_name.endswith('/'):
+                        os.makedirs(out_path, exist_ok=True)
+                        continue
 
-                in_info = {"size": info.file_size, "time": str(info.date_time)}
-                final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
-                if status == "write":
-                    os.makedirs(os.path.dirname(final_path), exist_ok=True)
-                    with zf.open(info) as src, open(final_path, 'wb') as dst:
-                        while True:
-                            if is_cancelled_fn(): break
-                            chunk = src.read(CHUNK_SIZE)
-                            if not chunk: break
-                            dst.write(chunk)
-                            processed += len(chunk)
-                            update_fn(processed, total_bytes, start_time, os.path.basename(info.filename))
-                else:
-                    processed += info.file_size
-                    update_fn(processed, total_bytes, start_time, os.path.basename(info.filename))
-            zf.close()
+                    time_str = datetime.datetime(*info.date_time).strftime("%b %d, %Y - %I:%M %p") if len(info.date_time) >= 6 else "Archive Item"
+                    in_info = {"size": info.file_size, "time": time_str}
+                    final_path, status = resolve_collision_path(out_path, in_info, conflict_state, parent)
+                    if status == "write":
+                        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+                        created_paths.append(final_path)
+                        with zf.open(info) as src, open(final_path, 'wb') as dst:
+                            while True:
+                                if is_cancelled_fn(): break
+                                chunk = src.read(STREAM_BUFFER_SIZE)
+                                if not chunk: break
+                                dst.write(chunk)
+                                processed += len(chunk)
+                                update_fn(processed, total_bytes, start_time, os.path.basename(info.filename))
+                    else:
+                        processed += info.file_size
+                        update_fn(processed, total_bytes, start_time, os.path.basename(info.filename))
+            finally:
+                zf.close()
+
+        if is_cancelled_fn():
+            cancel_cleanup()
 
     standalone = False
     if not parent:
@@ -2145,7 +2403,10 @@ def run_live_extract_folder(archive_path, destination_dir, password=None, parent
             try: parent.destroy()
             except Exception: pass
 
-    dlg = UniversalLiveProgressDialog(parent, f"Extracting '{os.path.basename(archive_path)[:28]}'...", task, on_done=_cleanup)
+    dlg = UniversalLiveProgressDialog(
+        parent, f"Extracting '{os.path.basename(archive_path)[:28]}'...", task,
+        on_done=_cleanup, on_cancel=cancel_cleanup
+    )
     if standalone:
         parent.mainloop()
 
@@ -2184,8 +2445,16 @@ def run_live_unpack_folder_batch(targets, destination_dir=None, parent=None, on_
             if move_info[0] == "extract":
                 _, arch_path, out_dir = move_info
                 ext = os.path.splitext(arch_path)[1].lower()
-                if ext == ".zip" or os.path.isfile(arch_path):
-                    try:
+                try:
+                    if ext in [".7z", ".fz", ".fzip"] and HAS_PY7ZR:
+                        with py7zr.SevenZipFile(arch_path, 'r') as szf:
+                            szf.extractall(path=out_dir)
+                        os.remove(arch_path)
+                    elif ext == ".rar" and HAS_RARFILE:
+                        with rarfile.RarFile(arch_path, 'r') as rf:
+                            rf.extractall(path=out_dir)
+                        os.remove(arch_path)
+                    elif ext in [".zip"] or os.path.isfile(arch_path):
                         with zipfile.ZipFile(arch_path, 'r') as zf:
                             for m in zf.infolist():
                                 if is_cancelled_fn(): break
@@ -2195,15 +2464,20 @@ def run_live_unpack_folder_batch(targets, destination_dir=None, parent=None, on_
                                     os.makedirs(out_p, exist_ok=True)
                                     continue
 
-                                final_p, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
+                                time_str = datetime.datetime(*m.date_time).strftime("%b %d, %Y - %I:%M %p") if len(m.date_time) >= 6 else "Archive Item"
+                                final_p, st = resolve_collision_path(out_p, {"size": m.file_size, "time": time_str}, conflict_state, parent)
                                 if st == "write":
                                     os.makedirs(os.path.dirname(final_p), exist_ok=True)
                                     with zf.open(m) as s, open(final_p, 'wb') as d:
-                                        shutil.copyfileobj(s, d)
+                                        while True:
+                                            chunk = s.read(STREAM_BUFFER_SIZE)
+                                            if not chunk: break
+                                            d.write(chunk)
                                 processed_bytes += m.file_size
                                 update_fn(processed_bytes, total_bytes, start_time, os.path.basename(m.filename))
                         os.remove(arch_path)
-                    except Exception: pass
+                except Exception as e:
+                    print(f"Unpack error: {e}")
 
             elif move_info[0] == "move":
                 _, src_p, dst_p, parent_folder = move_info
@@ -2347,11 +2621,15 @@ def run_live_unpack_and_extract_all_batch(targets, destination_dir=None, parent=
                                             os.makedirs(out_p, exist_ok=True)
                                             continue
 
-                                        fp, st = resolve_collision_path(out_p, {"size": m.file_size, "time": str(m.date_time)}, conflict_state, parent)
+                                        time_str = datetime.datetime(*m.date_time).strftime("%b %d, %Y - %I:%M %p") if len(m.date_time) >= 6 else "Archive Item"
+                                        fp, st = resolve_collision_path(out_p, {"size": m.file_size, "time": time_str}, conflict_state, parent)
                                         if st == "write":
                                             os.makedirs(os.path.dirname(fp), exist_ok=True)
                                             with zf.open(m) as s, open(fp, 'wb') as d:
-                                                shutil.copyfileobj(s, d)
+                                                while True:
+                                                    chunk = s.read(STREAM_BUFFER_SIZE)
+                                                    if not chunk: break
+                                                    d.write(chunk)
                                 os.remove(f_path)
                             except Exception: pass
                         elif ext in [".7z", ".fz", ".fzip"] and HAS_PY7ZR:
@@ -2635,7 +2913,7 @@ def uninstall_windows_shell_context_menu():
 def try_send_ipc_gui(args):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.05)
+        s.settimeout(0.15)
         s.connect(('127.0.0.1', IPC_PORT))
         s.sendall(json.dumps(args).encode('utf-8'))
         s.close()
@@ -2653,7 +2931,13 @@ def start_ipc_server_thread(app):
             server.listen(5)
             while True:
                 conn, addr = server.accept()
-                data = conn.recv(4096)
+                chunks = []
+                while True:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                data = b"".join(chunks)
                 if data:
                     paths = json.loads(data.decode('utf-8'))
                     for p in paths:
